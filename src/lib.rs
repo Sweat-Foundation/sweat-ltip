@@ -3,6 +3,8 @@ mod tests;
 
 use std::collections::HashMap;
 
+use near_sdk::env::log_str;
+use near_sdk::serde::de::IntoDeserializer;
 use near_sdk::serde_json;
 
 use near_sdk::{
@@ -235,7 +237,7 @@ impl Contract {
     #[private]
     pub fn on_authorize_complete(&mut self, total_transfers: u32) {
         // Log the completion of the batch transfer
-        near_sdk::env::log_str(&format!(
+        log_str(&format!(
             "Authorize batch completed: {} transfers processed",
             total_transfers
         ));
@@ -251,11 +253,11 @@ impl Contract {
                 match result {
                     near_sdk::PromiseResult::Successful(_) => {
                         // Transfer succeeded, no action needed
-                        near_sdk::env::log_str(&format!("Transfer {} succeeded", transfer_index));
+                        log_str(&format!("Transfer {} succeeded", transfer_index));
                     }
                     near_sdk::PromiseResult::Failed => {
                         // Transfer failed, need to revert the claimed_amount
-                        near_sdk::env::log_str(&format!(
+                        log_str(&format!(
                             "Transfer {} failed, reverting claimed_amount",
                             transfer_index
                         ));
@@ -276,7 +278,7 @@ impl Contract {
                                     grant.order_amount =
                                         U128::from(grant.order_amount.0 + failed_amount.0);
 
-                                    near_sdk::env::log_str(&format!(
+                                    log_str(&format!(
                                         "Reverted {} tokens for account {} grant {}: claimed_amount={}, order_amount={}",
                                         failed_amount.0,
                                         account_id,
@@ -311,7 +313,21 @@ impl Contract {
      * The grant will start with zero claimed_amount and zero order_amount.
      */
     pub fn create_grant(&mut self, account_id: AccountId, issue_date: u32, total_amount: U128) {
-        // Get or create the account
+        self.create_grant_internal(&account_id, issue_date, total_amount, None);
+
+        env::log_str(&format!(
+            "Created grant for account {}: issue_date={}, total_amount={}",
+            account_id, issue_date, total_amount.0
+        ));
+    }
+
+    pub fn create_grant_internal(
+        &mut self,
+        account_id: &AccountId,
+        issue_date: u32,
+        total_amount: U128,
+        claimed_amount: Option<U128>,
+    ) {
         let account = self.accounts.entry(account_id.clone()).or_insert(Account {
             grants: HashMap::new(),
         });
@@ -319,18 +335,12 @@ impl Contract {
         // Create the new grant
         let grant = Grant {
             total_amount,
-            claimed_amount: U128::from(0),
+            claimed_amount: claimed_amount.unwrap_or(0.into()),
             order_amount: U128::from(0),
         };
 
         // Insert the grant with the given issue_date
         account.grants.insert(issue_date, grant);
-
-        // Log the grant creation
-        env::log_str(&format!(
-            "Created grant for account {}: issue_date={}, total_amount={}",
-            account_id, issue_date, total_amount.0
-        ));
     }
 
     /**

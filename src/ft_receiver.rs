@@ -9,11 +9,12 @@ use crate::{Contract, ContractExt};
 pub enum FtMessage {
     TopUp,
     Issue(IssueData),
+    Migrate(Vec<(AccountId, u32, U128, U128)>),
 }
 
 #[near(serializers = [json])]
 pub struct IssueData {
-    pub issue_timestamp: u32,
+    pub issue_date: u32,
     pub grants: Vec<(AccountId, U128)>,
 }
 
@@ -31,6 +32,7 @@ impl FungibleTokenReceiver for Contract {
         match message {
             FtMessage::TopUp => self.on_top_up(amount),
             FtMessage::Issue(issue_data) => self.on_issue(amount, issue_data),
+            FtMessage::Migrate(accounts) => self.on_migrate(amount, accounts),
         }
 
         PromiseOrValue::Value(0.into())
@@ -49,6 +51,21 @@ impl Contract {
             "Transferred amount doesn't match total grants amount"
         );
 
-        self.issue(issue_data.issue_timestamp, issue_data.grants);
+        self.issue(issue_data.issue_date, issue_data.grants);
+    }
+
+    fn on_migrate(&mut self, amount: U128, accounts: Vec<(AccountId, u32, U128, U128)>) {
+        let total_amount: u128 = accounts
+            .iter()
+            .map(|(_, _, total_amount, claimed_amount)| total_amount.0 - claimed_amount.0)
+            .sum();
+        require!(
+            total_amount == amount.0,
+            "Transferred amount doesn't match total grants amount"
+        );
+
+        for (account_id, issue_date, total_amount, claimed_amount) in accounts.into_iter() {
+            self.create_grant_internal(&account_id, issue_date, total_amount, Some(claimed_amount));
+        }
     }
 }
