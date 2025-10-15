@@ -402,6 +402,42 @@ impl Contract {
     }
 
     /**
+     * Terminates an account by declining all orders and reducing grant total amounts
+     * to the amount that would be unlocked at the given timestamp.
+     * This effectively cancels any pending orders and adjusts grants to their current vesting status.
+     */
+    pub fn terminate(&mut self, account_id: AccountId, timestamp: u64) {
+        // First, decline all orders for this account
+        self.decline(vec![account_id.clone()]);
+
+        // Then, adjust grant total amounts based on vesting schedule at timestamp
+        if let Some(account) = self.accounts.get_mut(&account_id) {
+            for (issue_date, grant) in account.grants.iter_mut() {
+                // Calculate the unlocked amount at the given timestamp using the same logic as claim
+                let cliff_end = (*issue_date as u64) + (self.config.cliff_duration as u64);
+                let full_unlock = cliff_end + (self.config.full_unlock_duration as u64);
+
+                let unlocked_amount = if timestamp < cliff_end {
+                    // Still in cliff period - nothing unlocked
+                    0
+                } else if timestamp >= full_unlock {
+                    // Fully unlocked
+                    grant.total_amount.0
+                } else {
+                    // Partially unlocked - linear unlock during unlock period
+                    let unlock_period_duration = full_unlock - cliff_end;
+                    let elapsed_since_cliff = timestamp - cliff_end;
+
+                    (grant.total_amount.0 * elapsed_since_cliff as u128)
+                        / unlock_period_duration as u128
+                };
+
+                grant.total_amount = unlocked_amount.max(grant.claimed_amount.0).into();
+            }
+        }
+    }
+
+    /**
      * Issues grants to multiple accounts with a specific issue timestamp.
      * Creates grants for each account_id with the corresponding amount.
      * Fails if the total amount exceeds the spare_balance.
@@ -2714,6 +2750,400 @@ mod tests {
 
         // Verify spare_balance was reduced by new amount
         assert_eq!(contract.spare_balance, U128::from(5000)); // 10000 - 5000
+    }
+
+    #[test]
+    fn test_terminate_basic_functionality() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create a grant with some claimed and order amounts
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(2000),
+                order_amount: U128::from(3000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 1500 (during cliff period)
+        contract.terminate(accounts(1), 1500);
+
+        // Check that orders were declined
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
+
+        // Check that total_amount was set to claimed_amount (since claimed_amount > unlocked amount)
+        assert_eq!(grant.total_amount, U128::from(2000)); // Set to claimed_amount
+        assert_eq!(grant.claimed_amount, U128::from(2000)); // Unchanged
+    }
+
+    #[test]
+    fn test_terminate_during_unlock_period() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create a grant
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(1000),
+                order_amount: U128::from(2000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 2000 (50% through unlock period)
+        // At 2000: cliff_duration=1000, unlock_duration=2000
+        // Time since cliff: 2000 - 1000 - 1000 = 0 (just started unlock)
+        // Unlocked amount should be 0 (just at cliff end)
+        contract.terminate(accounts(1), 2000);
+
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
+        assert_eq!(grant.total_amount, U128::from(1000)); // Set to claimed_amount
+        assert_eq!(grant.claimed_amount, U128::from(1000)); // Unchanged
+    }
+
+    #[test]
+    fn test_terminate_during_linear_unlock() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create a grant
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(1000),
+                order_amount: U128::from(2000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 2500 (25% through unlock period)
+        // At 2500: cliff_duration=1000, unlock_duration=2000
+        // Time since cliff: 2500 - 1000 - 1000 = 500
+        // Unlocked amount: 10000 * 500 / 2000 = 2500
+        contract.terminate(accounts(1), 2500);
+
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
+        assert_eq!(grant.total_amount, U128::from(2500)); // 25% unlocked
+        assert_eq!(grant.claimed_amount, U128::from(1000)); // Unchanged (less than total)
+    }
+
+    #[test]
+    fn test_terminate_after_full_unlock() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create a grant
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(5000),
+                order_amount: U128::from(2000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 4000 (after full unlock)
+        contract.terminate(accounts(1), 4000);
+
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
+        assert_eq!(grant.total_amount, U128::from(10000)); // Fully unlocked
+        assert_eq!(grant.claimed_amount, U128::from(5000)); // Unchanged
+    }
+
+    #[test]
+    fn test_terminate_sets_total_amount_to_claimed_when_needed() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create a grant with claimed_amount > what will be unlocked
+        // This tests that total_amount is set to claimed_amount when claimed > unlocked
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(8000), // More than will be unlocked
+                order_amount: U128::from(2000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 2500 (25% through unlock period)
+        // Unlocked amount: 10000 * 500 / 2000 = 2500
+        contract.terminate(accounts(1), 2500);
+
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
+        assert_eq!(grant.total_amount, U128::from(8000)); // Set to claimed_amount (since claimed > unlocked)
+        assert_eq!(grant.claimed_amount, U128::from(8000)); // Unchanged
+    }
+
+    #[test]
+    fn test_terminate_multiple_grants() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create multiple grants
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(1000),
+                order_amount: U128::from(2000),
+            },
+        );
+        account.grants.insert(
+            2000, // issue_date (different)
+            Grant {
+                total_amount: U128::from(5000),
+                claimed_amount: U128::from(500),
+                order_amount: U128::from(1000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 2500
+        contract.terminate(accounts(1), 2500);
+
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+
+        // First grant (issue_date 1000): 25% unlocked = 2500
+        let grant1 = account.grants.get(&1000).unwrap();
+        assert_eq!(grant1.order_amount, U128::from(0));
+        assert_eq!(grant1.total_amount, U128::from(2500));
+        assert_eq!(grant1.claimed_amount, U128::from(1000));
+
+        // Second grant (issue_date 2000): still in cliff, but set to claimed_amount
+        let grant2 = account.grants.get(&2000).unwrap();
+        assert_eq!(grant2.order_amount, U128::from(0));
+        assert_eq!(grant2.total_amount, U128::from(500)); // Set to claimed_amount
+        assert_eq!(grant2.claimed_amount, U128::from(500)); // Unchanged
+    }
+
+    #[test]
+    fn test_terminate_nonexistent_account() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Terminate non-existent account - should not panic
+        contract.terminate(accounts(2), 2500);
+
+        // Verify contract state is unchanged
+        assert_eq!(contract.accounts.len(), 0);
+    }
+
+    #[test]
+    fn test_terminate_preserves_claimed_amount_when_unlocked_less() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create a grant where claimed_amount > what will be unlocked at termination
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000, // issue_date
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(6000), // More than will be unlocked
+                order_amount: U128::from(1000),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Terminate at timestamp 1500 (during cliff period - 0% unlocked)
+        contract.terminate(accounts(1), 1500);
+
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        
+        // Orders should be declined
+        assert_eq!(grant.order_amount, U128::from(0));
+        
+        // total_amount should be set to claimed_amount (6000) since unlocked (0) < claimed (6000)
+        assert_eq!(grant.total_amount, U128::from(6000));
+        
+        // claimed_amount should remain unchanged
+        assert_eq!(grant.claimed_amount, U128::from(6000));
+    }
+
+    #[test]
+    fn test_terminate_workflow_integration() {
+        let mut context = get_context(accounts(1));
+        context.block_timestamp(1000);
+        testing_env!(context.build());
+
+        let mut contract = Contract {
+            token_id: accounts(0),
+            accounts: IterableMap::new(b"a".to_vec()),
+            config: Config {
+                cliff_duration: 1000,
+                full_unlock_duration: 2000,
+            },
+            spare_balance: U128::from(1000000),
+            pending_transfers: HashMap::new(),
+        };
+
+        // Create account with grants
+        let mut account = Account {
+            grants: HashMap::new(),
+        };
+        account.grants.insert(
+            1000,
+            Grant {
+                total_amount: U128::from(10000),
+                claimed_amount: U128::from(0),
+                order_amount: U128::from(0),
+            },
+        );
+        contract.accounts.insert(accounts(1), account);
+
+        // Simulate some activity: claim and create orders
+        contract.claim();
+
+        // Manually set order amounts to simulate buy/authorize workflow
+        let account = contract.accounts.get_mut(&accounts(1)).unwrap();
+        let grant = account.grants.get_mut(&1000).unwrap();
+        grant.order_amount = U128::from(3000);
+
+        // Terminate the account
+        contract.terminate(accounts(1), 2500);
+
+        // Verify termination effects
+        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let grant = account.grants.get(&1000).unwrap();
+        assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
+        assert_eq!(grant.total_amount, U128::from(2500)); // Reduced to unlocked amount
+                                                          // claimed_amount should be adjusted if needed
     }
 
     #[test]
