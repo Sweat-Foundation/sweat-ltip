@@ -13,22 +13,50 @@ fn get_context(predecessor_account_id: AccountId) -> VMContextBuilder {
     builder
 }
 
+const CLIFF_DURATION: u32 = 1000;
+const FULL_UNLOCK_DURATION: u32 = 2000;
+
+fn init_contract_with_spare(spare_balance: u128) -> Contract {
+    let admin = accounts(0);
+    let operator = accounts(1);
+
+    let mut contract = Contract::init(
+        admin.clone(),
+        CLIFF_DURATION,
+        FULL_UNLOCK_DURATION,
+        admin.clone(),
+    );
+
+    contract.add_role(&admin, &Roles::Executor);
+    contract.add_role(&admin, &Roles::Issuer);
+    contract.add_role(&operator, &Roles::Executor);
+    contract.add_role(&operator, &Roles::Issuer);
+
+    contract.spare_balance = U128::from(spare_balance);
+    contract
+}
+
+fn grant_executor(contract: &mut Contract, account: &AccountId) {
+    contract.add_role(account, &Roles::Executor);
+}
+
+fn grant_issuer(contract: &mut Contract, account: &AccountId) {
+    contract.add_role(account, &Roles::Issuer);
+}
+
+fn set_predecessor(predecessor: &AccountId, timestamp: u64) {
+    let mut context = get_context(predecessor.clone());
+    context.block_timestamp(timestamp);
+    testing_env!(context.build());
+}
+
 #[test]
 fn test_claim_during_cliff_period() {
     let mut context = get_context(accounts(1));
     context.block_timestamp(1000); // Set initial timestamp in seconds
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,       // 1000 seconds cliff
-            full_unlock_duration: 2000, // 2000 seconds unlock period
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Add a grant with issue date at timestamp 1000
     let mut account = Account {
@@ -62,16 +90,7 @@ fn test_claim_during_unlock_period() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,       // 1000 seconds cliff
-            full_unlock_duration: 2000, // 2000 seconds unlock period
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Add a grant with issue date at timestamp 1000
     let mut account = Account {
@@ -106,16 +125,7 @@ fn test_claim_after_full_unlock() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,       // 1000 seconds cliff
-            full_unlock_duration: 2000, // 2000 seconds unlock period
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Add a grant with issue date at timestamp 1000
     let mut account = Account {
@@ -149,16 +159,7 @@ fn test_claim_with_existing_orders() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,       // 1000 seconds cliff
-            full_unlock_duration: 2000, // 2000 seconds unlock period
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Add a grant with issue date at timestamp 1000, with some already claimed and some existing orders
     let mut account = Account {
@@ -188,22 +189,16 @@ fn test_claim_with_existing_orders() {
 
 #[test]
 fn test_buy_function() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
-    // Add a grant with some order amount
     let mut account = Account {
         grants: HashMap::new(),
     };
@@ -215,13 +210,17 @@ fn test_buy_function() {
             order_amount: U128::from(5000), // 5000 available for buy
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
 
-    // Buy 50% (5000 basis points) of the order amount
-    contract.buy(vec![accounts(1)], 5000);
+    contract.add_role(&executor, &Roles::Executor);
 
-    // Check that 50% was bought: 5000 * 50% = 2500
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+
+    contract.buy(vec![beneficiary.clone()], 5000);
+
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(3500)); // 1000 + 2500
     assert_eq!(grant.order_amount, U128::from(0)); // Should be reset to 0
@@ -230,22 +229,16 @@ fn test_buy_function() {
 
 #[test]
 fn test_buy_function_partial_percentage() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
-    // Add a grant with some order amount
     let mut account = Account {
         grants: HashMap::new(),
     };
@@ -257,37 +250,36 @@ fn test_buy_function_partial_percentage() {
             order_amount: U128::from(10000), // 10000 available for buy
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
 
-    // Buy 12.34% (1234 basis points) of the order amount
-    contract.buy(vec![accounts(1)], 1234);
+    contract.add_role(&executor, &Roles::Executor);
 
-    // Check that 12.34% was bought: 10000 * 12.34% = 1234
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+
+    contract.buy(vec![beneficiary.clone()], 1234);
+
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(1234));
-    assert_eq!(grant.order_amount, U128::from(0)); // Should be reset to 0
-    assert_eq!(contract.spare_balance, U128::from(1001234)); // 1000000 + 1234
+    assert_eq!(grant.order_amount, U128::from(0));
+    assert_eq!(contract.spare_balance, U128::from(1001234));
 }
 
 #[test]
 fn test_buy_function_multiple_accounts() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary_one = accounts(1);
+    let beneficiary_two = accounts(2);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
-    // Add grants for two accounts
     let mut account1 = Account {
         grants: HashMap::new(),
     };
@@ -299,7 +291,7 @@ fn test_buy_function_multiple_accounts() {
             order_amount: U128::from(5000),
         },
     );
-    contract.accounts.insert(accounts(1), account1);
+    contract.accounts.insert(beneficiary_one.clone(), account1);
 
     let mut account2 = Account {
         grants: HashMap::new(),
@@ -312,69 +304,61 @@ fn test_buy_function_multiple_accounts() {
             order_amount: U128::from(8000),
         },
     );
-    contract.accounts.insert(accounts(2), account2);
+    contract.accounts.insert(beneficiary_two.clone(), account2);
 
-    // Buy 25% (2500 basis points) from both accounts
-    contract.buy(vec![accounts(1), accounts(2)], 2500);
+    contract.add_role(&executor, &Roles::Executor);
 
-    // Check account 1: 5000 * 25% = 1250
-    let account1 = contract.accounts.get(&accounts(1)).unwrap();
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+
+    contract.buy(vec![beneficiary_one.clone(), beneficiary_two.clone()], 2500);
+
+    let account1 = contract.accounts.get(&beneficiary_one).unwrap();
     let grant1 = account1.grants.get(&1000).unwrap();
     assert_eq!(grant1.claimed_amount, U128::from(1250));
     assert_eq!(grant1.order_amount, U128::from(0));
 
-    // Check account 2: 8000 * 25% = 2000
-    let account2 = contract.accounts.get(&accounts(2)).unwrap();
+    let account2 = contract.accounts.get(&beneficiary_two).unwrap();
     let grant2 = account2.grants.get(&1000).unwrap();
-    assert_eq!(grant2.claimed_amount, U128::from(3000)); // 1000 + 2000
+    assert_eq!(grant2.claimed_amount, U128::from(3000));
     assert_eq!(grant2.order_amount, U128::from(0));
 
-    // Check total spare balance: 1000000 + 1250 + 2000 = 1003250
     assert_eq!(contract.spare_balance, U128::from(1003250));
 }
 
 #[test]
 fn test_buy_function_no_grants() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    contract.add_role(&executor, &Roles::Executor);
 
-    // Try to buy from an account that doesn't exist
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+
     contract.buy(vec![accounts(1)], 5000);
 
-    // Spare balance should remain unchanged
     assert_eq!(contract.spare_balance, U128::from(1000000));
 }
 
 #[test]
 fn test_buy_function_zero_order_amount() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
-    // Add a grant with zero order amount
     let mut account = Account {
         grants: HashMap::new(),
     };
@@ -386,37 +370,35 @@ fn test_buy_function_zero_order_amount() {
             order_amount: U128::from(0), // No order amount
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
 
-    // Try to buy from this account
-    contract.buy(vec![accounts(1)], 5000);
+    contract.add_role(&executor, &Roles::Executor);
 
-    // Nothing should change since order_amount is 0
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+
+    contract.buy(vec![beneficiary.clone()], 5000);
+
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.claimed_amount, U128::from(1000)); // Unchanged
-    assert_eq!(grant.order_amount, U128::from(0)); // Unchanged
-    assert_eq!(contract.spare_balance, U128::from(1000000)); // Unchanged
+    assert_eq!(grant.claimed_amount, U128::from(1000));
+    assert_eq!(grant.order_amount, U128::from(0));
+    assert_eq!(contract.spare_balance, U128::from(1000000));
 }
 
 #[test]
 fn test_claim_and_buy_workflow() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
-    // Add a grant
     let mut account = Account {
         grants: HashMap::new(),
     };
@@ -428,41 +410,49 @@ fn test_claim_and_buy_workflow() {
             order_amount: U128::from(0),
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
+
+    contract.add_role(&executor, &Roles::Executor);
 
     // Step 1: Claim after full unlock (timestamp 4000)
+    let mut context = get_context(beneficiary.clone());
     context.block_timestamp(4000);
     testing_env!(context.build());
     contract.claim();
 
-    // Verify claim worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.order_amount, U128::from(10000)); // Full amount available for order
 
     // Step 2: Buy 30% of the order
-    contract.buy(vec![accounts(1)], 3000); // 30% = 3000 basis points
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
+    contract.buy(vec![beneficiary.clone()], 3000); // 30% = 3000 basis points
 
-    // Verify buy worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(3000)); // 30% of 10000
     assert_eq!(grant.order_amount, U128::from(0)); // Order amount reset
     assert_eq!(contract.spare_balance, U128::from(1003000)); // 1000000 + 3000
 
     // Step 3: Claim again (should get remaining 70%)
+    let mut context = get_context(beneficiary.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
     contract.claim();
 
-    // Verify second claim worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.order_amount, U128::from(7000)); // Remaining 70%
 
     // Step 4: Buy remaining 50% of the new order
-    contract.buy(vec![accounts(1)], 5000); // 50% of 7000 = 3500
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
+    contract.buy(vec![beneficiary.clone()], 5000); // 50% of 7000 = 3500
 
-    // Verify final state
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(6500)); // 3000 + 3500
     assert_eq!(grant.order_amount, U128::from(0)); // Order amount reset
@@ -471,20 +461,15 @@ fn test_claim_and_buy_workflow() {
 
 #[test]
 fn test_authorize_function() {
-    let mut context = get_context(accounts(1));
+    let executor = accounts(0);
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(executor.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Add a grant with some order amount
     let mut account = Account {
@@ -498,13 +483,13 @@ fn test_authorize_function() {
             order_amount: U128::from(5000), // 5000 available for authorization
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
 
     // Authorize 50% (5000 basis points) of the order amount
-    contract.authorize(vec![accounts(1)], Some(5000));
+    contract.authorize(vec![beneficiary.clone()], Some(5000));
 
     // Check that 50% was authorized: 5000 * 50% = 2500
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(3500)); // 1000 + 2500
     assert_eq!(grant.order_amount, U128::from(0)); // Should be reset to 0
@@ -514,20 +499,15 @@ fn test_authorize_function() {
 
 #[test]
 fn test_authorize_function_default_percentage() {
-    let mut context = get_context(accounts(1));
+    let executor = accounts(0);
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(executor.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Add a grant with some order amount
     let mut account = Account {
@@ -541,13 +521,13 @@ fn test_authorize_function_default_percentage() {
             order_amount: U128::from(8000), // 8000 available for authorization
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
 
     // Authorize with no percentage (should default to 100%)
-    contract.authorize(vec![accounts(1)], None);
+    contract.authorize(vec![beneficiary.clone()], None);
 
     // Check that 100% was authorized: 8000 * 100% = 8000
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(8000));
     assert_eq!(grant.order_amount, U128::from(0)); // Should be reset to 0
@@ -556,20 +536,16 @@ fn test_authorize_function_default_percentage() {
 
 #[test]
 fn test_authorize_function_multiple_accounts() {
-    let mut context = get_context(accounts(1));
+    let executor = accounts(0);
+    let account_one = accounts(1);
+    let account_two = accounts(2);
+
+    let mut context = get_context(executor.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Add grants for two accounts
     let mut account1 = Account {
@@ -583,7 +559,7 @@ fn test_authorize_function_multiple_accounts() {
             order_amount: U128::from(6000),
         },
     );
-    contract.accounts.insert(accounts(1), account1);
+    contract.accounts.insert(account_one.clone(), account1);
 
     let mut account2 = Account {
         grants: HashMap::new(),
@@ -596,19 +572,19 @@ fn test_authorize_function_multiple_accounts() {
             order_amount: U128::from(4000),
         },
     );
-    contract.accounts.insert(accounts(2), account2);
+    contract.accounts.insert(account_two.clone(), account2);
 
     // Authorize 25% (2500 basis points) from both accounts
-    contract.authorize(vec![accounts(1), accounts(2)], Some(2500));
+    contract.authorize(vec![account_one.clone(), account_two.clone()], Some(2500));
 
     // Check account 1: 6000 * 25% = 1500
-    let account1 = contract.accounts.get(&accounts(1)).unwrap();
+    let account1 = contract.accounts.get(&account_one).unwrap();
     let grant1 = account1.grants.get(&1000).unwrap();
     assert_eq!(grant1.claimed_amount, U128::from(1500));
     assert_eq!(grant1.order_amount, U128::from(0));
 
     // Check account 2: 4000 * 25% = 1000
-    let account2 = contract.accounts.get(&accounts(2)).unwrap();
+    let account2 = contract.accounts.get(&account_two).unwrap();
     let grant2 = account2.grants.get(&1000).unwrap();
     assert_eq!(grant2.claimed_amount, U128::from(3000)); // 2000 + 1000
     assert_eq!(grant2.order_amount, U128::from(0));
@@ -619,20 +595,14 @@ fn test_authorize_function_multiple_accounts() {
 
 #[test]
 fn test_authorize_function_no_grants() {
-    let mut context = get_context(accounts(1));
+    let executor = accounts(0);
+
+    let mut context = get_context(executor.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Try to authorize from an account that doesn't exist
     contract.authorize(vec![accounts(1)], Some(5000));
@@ -643,20 +613,15 @@ fn test_authorize_function_no_grants() {
 
 #[test]
 fn test_authorize_function_zero_order_amount() {
-    let mut context = get_context(accounts(1));
+    let executor = accounts(0);
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(executor.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Add a grant with zero order amount
     let mut account = Account {
@@ -670,13 +635,13 @@ fn test_authorize_function_zero_order_amount() {
             order_amount: U128::from(0), // No order amount
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(beneficiary.clone(), account);
 
     // Try to authorize from this account
-    contract.authorize(vec![accounts(1)], Some(5000));
+    contract.authorize(vec![beneficiary.clone()], Some(5000));
 
     // Nothing should change since order_amount is 0
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.claimed_amount, U128::from(1000)); // Unchanged
     assert_eq!(grant.order_amount, U128::from(0)); // Unchanged
@@ -685,80 +650,79 @@ fn test_authorize_function_zero_order_amount() {
 
 #[test]
 fn test_complete_workflow_claim_buy_authorize() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    contract.create_grant(beneficiary.clone(), 1000, U128::from(10000));
+    contract.add_role(&executor, &Roles::Executor);
 
-    // Create a grant using the new create_grant function
-    contract.create_grant(accounts(1), 1000, U128::from(10000));
-
-    // Step 1: Claim after full unlock (timestamp 4000)
+    let mut context = get_context(beneficiary.clone());
     context.block_timestamp(4000);
     testing_env!(context.build());
     contract.claim();
 
-    // Verify claim worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.order_amount, U128::from(10000)); // Full amount available for order
+    assert_eq!(grant.order_amount, U128::from(10000));
 
-    // Step 2: Buy 20% of the order (goes to spare_balance)
-    contract.buy(vec![accounts(1)], 2000); // 20% = 2000 basis points
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
+    contract.buy(vec![beneficiary.clone()], 2000);
 
-    // Verify buy worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.claimed_amount, U128::from(2000)); // 20% of 10000
-    assert_eq!(grant.order_amount, U128::from(0)); // Order amount reset
-    assert_eq!(contract.spare_balance, U128::from(1002000)); // 1000000 + 2000
+    assert_eq!(grant.claimed_amount, U128::from(2000));
+    assert_eq!(grant.order_amount, U128::from(0));
+    assert_eq!(contract.spare_balance, U128::from(1002000));
 
-    // Step 3: Claim again (should get remaining 80%)
+    let mut context = get_context(beneficiary.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
     contract.claim();
 
-    // Verify second claim worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.order_amount, U128::from(8000)); // Remaining 80%
+    assert_eq!(grant.order_amount, U128::from(8000));
 
-    // Step 4: Authorize 50% of the new order (transfers to user, not spare_balance)
-    contract.authorize(vec![accounts(1)], Some(5000)); // 50% of 8000 = 4000
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
+    contract.authorize(vec![beneficiary.clone()], Some(5000));
 
-    // Verify authorize worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.claimed_amount, U128::from(6000)); // 2000 + 4000
-    assert_eq!(grant.order_amount, U128::from(0)); // Order amount reset
-    assert_eq!(contract.spare_balance, U128::from(1002000)); // Unchanged (unlike buy)
+    assert_eq!(grant.claimed_amount, U128::from(6000));
+    assert_eq!(grant.order_amount, U128::from(0));
+    assert_eq!(contract.spare_balance, U128::from(1002000));
 
-    // Clear pending transfers to simulate callback completion (for testing)
     contract.clear_pending_transfers();
 
-    // Step 5: Claim remaining 40%
+    let mut context = get_context(beneficiary.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
     contract.claim();
 
-    // Verify final claim worked
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.order_amount, U128::from(4000)); // Remaining 40%
+    assert_eq!(grant.order_amount, U128::from(4000));
 
-    // Final state verification
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
+    contract.authorize(vec![beneficiary.clone()], Some(10000));
+
+    let account = contract.accounts.get(&beneficiary).unwrap();
     let grant = account.grants.get(&1000).unwrap();
-    assert_eq!(grant.total_amount, U128::from(10000));
-    assert_eq!(grant.claimed_amount, U128::from(6000)); // 20% bought + 50% authorized
-    assert_eq!(grant.order_amount, U128::from(4000)); // 40% still available for order
-    assert_eq!(contract.spare_balance, U128::from(1002000)); // Only buy amount added
+    assert_eq!(grant.claimed_amount, U128::from(10000));
+    assert_eq!(grant.order_amount, U128::from(0));
+    assert_eq!(contract.spare_balance, U128::from(1002000));
 }
 
 #[test]
@@ -767,16 +731,7 @@ fn test_authorize_callback_function() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Test the callback function directly with 0 transfers to avoid promise_result issues
     contract.on_authorize_complete(0);
@@ -792,16 +747,7 @@ fn test_authorize_callback_with_failed_transfers() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Add a grant with some claimed amount
     let mut account = Account {
@@ -859,16 +805,7 @@ fn test_decline_function() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create grants with some order amounts
     contract.create_grant(accounts(1), 1000, U128::from(10000));
@@ -908,16 +845,7 @@ fn test_decline_multiple_accounts() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create grants for multiple accounts
     contract.create_grant(accounts(1), 1000, U128::from(10000));
@@ -955,31 +883,30 @@ fn test_decline_multiple_accounts() {
 
 #[test]
 fn test_buy_with_zero_percentage() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000);
+    grant_executor(&mut contract, &executor);
 
     // Create grants with order amounts
-    contract.create_grant(accounts(1), 1000, U128::from(10000));
-    let account1 = contract.accounts.get_mut(&accounts(1)).unwrap();
+    contract.create_grant(beneficiary.clone(), 1000, U128::from(10000));
+    let account1 = contract.accounts.get_mut(&beneficiary).unwrap();
     account1.grants.get_mut(&1000).unwrap().order_amount = U128::from(5000);
 
     // Call buy with 0% - should decline orders
-    contract.buy(vec![accounts(1)], 0);
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+    contract.buy(vec![beneficiary.clone()], 0);
 
     // Verify orders are cleared but no tokens were bought
-    let account1 = contract.accounts.get(&accounts(1)).unwrap();
+    let account1 = contract.accounts.get(&beneficiary).unwrap();
     let grant1 = account1.grants.get(&1000).unwrap();
     assert_eq!(grant1.order_amount, U128::from(0));
     assert_eq!(grant1.claimed_amount, U128::from(0)); // No claimed amount added
@@ -988,31 +915,30 @@ fn test_buy_with_zero_percentage() {
 
 #[test]
 fn test_authorize_with_zero_percentage() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000);
+    grant_executor(&mut contract, &executor);
 
     // Create grants with order amounts
-    contract.create_grant(accounts(1), 1000, U128::from(10000));
-    let account1 = contract.accounts.get_mut(&accounts(1)).unwrap();
+    contract.create_grant(beneficiary.clone(), 1000, U128::from(10000));
+    let account1 = contract.accounts.get_mut(&beneficiary).unwrap();
     account1.grants.get_mut(&1000).unwrap().order_amount = U128::from(5000);
 
     // Call authorize with 0% - should decline orders
-    contract.authorize(vec![accounts(1)], Some(0));
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
+    contract.authorize(vec![beneficiary.clone()], Some(0));
 
     // Verify orders are cleared but no tokens were authorized
-    let account1 = contract.accounts.get(&accounts(1)).unwrap();
+    let account1 = contract.accounts.get(&beneficiary).unwrap();
     let grant1 = account1.grants.get(&1000).unwrap();
     assert_eq!(grant1.order_amount, U128::from(0));
     assert_eq!(grant1.claimed_amount, U128::from(0)); // No claimed amount added
@@ -1026,16 +952,7 @@ fn test_decline_respects_pending_transfers() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create grants with order amounts
     contract.create_grant(accounts(1), 1000, U128::from(10000));
@@ -1069,16 +986,7 @@ fn test_get_account_existing() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grants for an account
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1110,16 +1018,7 @@ fn test_get_account_nonexistent() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let contract = init_contract_with_spare(10000);
 
     // Try to get non-existent account
     let account = contract.get_account(&accounts(1));
@@ -1132,16 +1031,7 @@ fn test_get_account_empty_grants() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create account with empty grants
     let account = Account {
@@ -1163,16 +1053,7 @@ fn test_get_account_with_claimed_grants() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grant and manually set claimed/order amounts
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1198,16 +1079,7 @@ fn test_get_account_multiple_accounts() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grants for multiple accounts
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1234,20 +1106,15 @@ fn test_get_account_multiple_accounts() {
 
 #[test]
 fn test_get_account_workflow_integration() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue grants
     let grants = vec![
@@ -1268,6 +1135,7 @@ fn test_get_account_workflow_integration() {
     assert_eq!(grant2.total_amount, U128::from(3000));
 
     // Claim to create orders
+    let mut context = get_context(accounts(1));
     context.block_timestamp(4000); // After full unlock
     testing_env!(context.build());
     contract.claim();
@@ -1284,36 +1152,22 @@ fn test_get_spare_balance_initial() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let contract = init_contract_with_spare(10000);
 
     assert_eq!(contract.get_spare_balance(), U128::from(10000));
 }
 
 #[test]
 fn test_get_spare_balance_after_issue() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue grants that consume spare balance
     let grants = vec![
@@ -1327,29 +1181,30 @@ fn test_get_spare_balance_after_issue() {
 
 #[test]
 fn test_get_spare_balance_after_buy() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let beneficiary = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_executor(&mut contract, &executor);
 
     // Create grants and claim them
-    contract.create_grant(accounts(1), 1000, U128::from(5000));
+    contract.create_grant(beneficiary.clone(), 1000, U128::from(5000));
+
+    let mut context = get_context(beneficiary.clone());
     context.block_timestamp(4000); // After full unlock
     testing_env!(context.build());
     contract.claim();
 
     // Buy back 50% of orders
-    contract.buy(vec![accounts(1)], 50);
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
+    contract.buy(vec![beneficiary.clone()], 50);
 
     // Spare balance should increase by 50% of the order amount (50 basis points = 0.5%)
     // bought_amount = (5000 * 50) / 10000 = 25
@@ -1362,16 +1217,7 @@ fn test_get_spare_balance_zero() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let contract = init_contract_with_spare(0);
 
     assert_eq!(contract.get_spare_balance(), U128::from(0));
 }
@@ -1382,36 +1228,24 @@ fn test_get_spare_balance_large_value() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(u128::MAX),
-        pending_transfers: HashMap::new(),
-    };
+    let contract = init_contract_with_spare(u128::MAX);
 
     assert_eq!(contract.get_spare_balance(), U128::from(u128::MAX));
 }
 
 #[test]
 fn test_get_spare_balance_workflow_integration() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_executor(&mut contract, &executor);
+    grant_issuer(&mut contract, &issuer);
 
     // Initial spare balance
     assert_eq!(contract.get_spare_balance(), U128::from(10000));
@@ -1434,6 +1268,9 @@ fn test_get_spare_balance_workflow_integration() {
     grant2.order_amount = U128::from(2000);
 
     // Buy back 30% of orders
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
     contract.buy(vec![accounts(1), accounts(2)], 30); // 30 basis points = 0.3%
 
     // Spare balance should increase by 30% of total orders (30 basis points = 0.3%)
@@ -1447,16 +1284,7 @@ fn test_get_pending_transfers_empty() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let contract = init_contract_with_spare(10000);
 
     let pending = contract.get_pending_transfers();
     assert!(pending.is_empty());
@@ -1474,16 +1302,8 @@ fn test_get_pending_transfers_single_account() {
         vec![(1000, U128::from(5000)), (2000, U128::from(3000))],
     );
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers,
-    };
+    let mut contract = init_contract_with_spare(10000);
+    contract.pending_transfers = pending_transfers;
 
     let pending = contract.get_pending_transfers();
     assert_eq!(pending.len(), 1);
@@ -1509,16 +1329,8 @@ fn test_get_pending_transfers_multiple_accounts() {
     );
     pending_transfers.insert(accounts(3), vec![(1000, U128::from(1000))]);
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers,
-    };
+    let mut contract = init_contract_with_spare(10000);
+    contract.pending_transfers = pending_transfers;
 
     let pending = contract.get_pending_transfers();
     assert_eq!(pending.len(), 3);
@@ -1545,20 +1357,15 @@ fn test_get_pending_transfers_multiple_accounts() {
 
 #[test]
 fn test_get_pending_transfers_after_authorize() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_executor(&mut contract, &executor);
 
     // Create grants and manually set order amounts
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1573,6 +1380,9 @@ fn test_get_pending_transfers_after_authorize() {
     grant2.order_amount = U128::from(3000);
 
     // Authorize transfers (this will populate pending_transfers)
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
     contract.authorize(vec![accounts(1), accounts(2)], Some(50)); // 50 basis points = 0.5%
 
     let pending = contract.get_pending_transfers();
@@ -1597,16 +1407,7 @@ fn test_get_pending_transfers_after_callback() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Manually set pending transfers
     let mut pending_transfers = HashMap::new();
@@ -1636,16 +1437,8 @@ fn test_get_pending_transfers_large_values() {
         ],
     );
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers,
-    };
+    let mut contract = init_contract_with_spare(10000);
+    contract.pending_transfers = pending_transfers;
 
     let pending = contract.get_pending_transfers();
     assert_eq!(pending.len(), 1);
@@ -1659,20 +1452,15 @@ fn test_get_pending_transfers_large_values() {
 
 #[test]
 fn test_get_pending_transfers_workflow_integration() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_executor(&mut contract, &executor);
 
     // Initial state - no pending transfers
     let pending = contract.get_pending_transfers();
@@ -1691,6 +1479,9 @@ fn test_get_pending_transfers_workflow_integration() {
     grant2.order_amount = U128::from(3000);
 
     // Authorize transfers
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
     contract.authorize(vec![accounts(1), accounts(2)], Some(30)); // 30 basis points = 0.3%
 
     // Check pending transfers after authorize
@@ -1717,16 +1508,7 @@ fn test_get_orders_empty() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let contract = init_contract_with_spare(10000);
 
     // No accounts, no orders
     let orders = contract.get_orders();
@@ -1739,16 +1521,7 @@ fn test_get_orders_no_orders() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grants but no orders
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1764,16 +1537,7 @@ fn test_get_orders_single_order() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grant and claim to create order
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1794,16 +1558,7 @@ fn test_get_orders_multiple_accounts() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grants for multiple accounts
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1849,16 +1604,7 @@ fn test_get_orders_multiple_grants_same_account() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create multiple grants for same account
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1900,16 +1646,7 @@ fn test_get_orders_partial_orders() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grants and manually set order amounts for caller account only
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1939,16 +1676,7 @@ fn test_get_orders_after_decline() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
 
     // Create grants and manually set order amounts
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -1979,20 +1707,17 @@ fn test_get_orders_after_decline() {
 
 #[test]
 fn test_get_orders_workflow_integration() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_executor(&mut contract, &executor);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue grants for caller account only
     let grants = vec![(accounts(1), U128::from(5000))];
@@ -2012,6 +1737,9 @@ fn test_get_orders_workflow_integration() {
     assert_eq!(orders.len(), 1);
 
     // Buy back some orders (this will clear all orders for account 1)
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1000);
+    testing_env!(context.build());
     contract.buy(vec![accounts(1)], 5000); // 50% buyback
 
     // After buy, all orders should be cleared
@@ -2021,20 +1749,15 @@ fn test_get_orders_workflow_integration() {
 
 #[test]
 fn test_issue_function() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue grants to multiple accounts
     let grants = vec![
@@ -2065,20 +1788,15 @@ fn test_issue_function() {
 
 #[test]
 fn test_issue_insufficient_balance() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(5000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(5000);
+    grant_issuer(&mut contract, &issuer);
 
     // Try to issue more than available balance
     let grants = vec![
@@ -2096,20 +1814,15 @@ fn test_issue_insufficient_balance() {
 
 #[test]
 fn test_issue_exact_balance() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(5000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(5000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue exactly the available balance
     let grants = vec![
@@ -2136,20 +1849,15 @@ fn test_issue_exact_balance() {
 
 #[test]
 fn test_issue_single_account() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(5000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(5000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue grant to single account
     let grants = vec![(accounts(1), U128::from(3000))];
@@ -2166,20 +1874,15 @@ fn test_issue_single_account() {
 
 #[test]
 fn test_issue_empty_grants() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(5000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(5000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue empty grants list
     let grants = vec![];
@@ -2193,20 +1896,15 @@ fn test_issue_empty_grants() {
 
 #[test]
 fn test_issue_overwrites_existing_grant() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_issuer(&mut contract, &issuer);
 
     // Create initial grant
     contract.create_grant(accounts(1), 1000, U128::from(2000));
@@ -2232,20 +1930,15 @@ fn test_issue_overwrites_existing_grant() {
 
 #[test]
 fn test_terminate_basic_functionality() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create a grant with some claimed and order amounts
     let mut account = Account {
@@ -2262,6 +1955,9 @@ fn test_terminate_basic_functionality() {
     contract.accounts.insert(accounts(1), account);
 
     // Terminate at timestamp 1500 (during cliff period)
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1500);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 1500);
 
     // Check that orders were declined
@@ -2276,20 +1972,15 @@ fn test_terminate_basic_functionality() {
 
 #[test]
 fn test_terminate_during_unlock_period() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create a grant
     let mut account = Account {
@@ -2309,6 +2000,9 @@ fn test_terminate_during_unlock_period() {
     // At 2000: cliff_duration=1000, unlock_duration=2000
     // Time since cliff: 2000 - 1000 - 1000 = 0 (just started unlock)
     // Unlocked amount should be 0 (just at cliff end)
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(2000);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 2000);
 
     let account = contract.accounts.get(&accounts(1)).unwrap();
@@ -2320,20 +2014,15 @@ fn test_terminate_during_unlock_period() {
 
 #[test]
 fn test_terminate_during_linear_unlock() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create a grant
     let mut account = Account {
@@ -2353,6 +2042,9 @@ fn test_terminate_during_linear_unlock() {
     // At 2500: cliff_duration=1000, unlock_duration=2000
     // Time since cliff: 2500 - 1000 - 1000 = 500
     // Unlocked amount: 10000 * 500 / 2000 = 2500
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(2500);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 2500);
 
     let account = contract.accounts.get(&accounts(1)).unwrap();
@@ -2364,20 +2056,15 @@ fn test_terminate_during_linear_unlock() {
 
 #[test]
 fn test_terminate_after_full_unlock() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create a grant
     let mut account = Account {
@@ -2394,6 +2081,9 @@ fn test_terminate_after_full_unlock() {
     contract.accounts.insert(accounts(1), account);
 
     // Terminate at timestamp 4000 (after full unlock)
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 4000);
 
     let account = contract.accounts.get(&accounts(1)).unwrap();
@@ -2405,20 +2095,15 @@ fn test_terminate_after_full_unlock() {
 
 #[test]
 fn test_terminate_sets_total_amount_to_claimed_when_needed() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create a grant with claimed_amount > what will be unlocked
     // This tests that total_amount is set to claimed_amount when claimed > unlocked
@@ -2437,6 +2122,9 @@ fn test_terminate_sets_total_amount_to_claimed_when_needed() {
 
     // Terminate at timestamp 2500 (25% through unlock period)
     // Unlocked amount: 10000 * 500 / 2000 = 2500
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(2500);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 2500);
 
     let account = contract.accounts.get(&accounts(1)).unwrap();
@@ -2448,20 +2136,15 @@ fn test_terminate_sets_total_amount_to_claimed_when_needed() {
 
 #[test]
 fn test_terminate_multiple_grants() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create multiple grants
     let mut account = Account {
@@ -2486,6 +2169,9 @@ fn test_terminate_multiple_grants() {
     contract.accounts.insert(accounts(1), account);
 
     // Terminate at timestamp 2500
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(2500);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 2500);
 
     let account = contract.accounts.get(&accounts(1)).unwrap();
@@ -2505,22 +2191,20 @@ fn test_terminate_multiple_grants() {
 
 #[test]
 fn test_terminate_nonexistent_account() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Terminate non-existent account - should not panic
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(2500);
+    testing_env!(context.build());
     contract.terminate(accounts(2), 2500);
 
     // Verify contract state is unchanged
@@ -2529,20 +2213,15 @@ fn test_terminate_nonexistent_account() {
 
 #[test]
 fn test_terminate_preserves_claimed_amount_when_unlocked_less() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create a grant where claimed_amount > what will be unlocked at termination
     let mut account = Account {
@@ -2559,6 +2238,9 @@ fn test_terminate_preserves_claimed_amount_when_unlocked_less() {
     contract.accounts.insert(accounts(1), account);
 
     // Terminate at timestamp 1500 (during cliff period - 0% unlocked)
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(1500);
+    testing_env!(context.build());
     contract.terminate(accounts(1), 1500);
 
     let account = contract.accounts.get(&accounts(1)).unwrap();
@@ -2576,20 +2258,16 @@ fn test_terminate_preserves_claimed_amount_when_unlocked_less() {
 
 #[test]
 fn test_terminate_workflow_integration() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let executor = admin.clone();
+    let user = accounts(1);
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
+    grant_executor(&mut contract, &executor);
 
     // Create account with grants
     let mut account = Account {
@@ -2603,21 +2281,27 @@ fn test_terminate_workflow_integration() {
             order_amount: U128::from(0),
         },
     );
-    contract.accounts.insert(accounts(1), account);
+    contract.accounts.insert(user.clone(), account);
 
     // Simulate some activity: claim and create orders
+    let mut context = get_context(user.clone());
+    context.block_timestamp(4000);
+    testing_env!(context.build());
     contract.claim();
 
     // Manually set order amounts to simulate buy/authorize workflow
-    let account = contract.accounts.get_mut(&accounts(1)).unwrap();
+    let account = contract.accounts.get_mut(&user).unwrap();
     let grant = account.grants.get_mut(&1000).unwrap();
     grant.order_amount = U128::from(3000);
 
     // Terminate the account
-    contract.terminate(accounts(1), 2500);
+    let mut context = get_context(executor.clone());
+    context.block_timestamp(2500);
+    testing_env!(context.build());
+    contract.terminate(user.clone(), 2500);
 
     // Verify termination effects
-    let account = contract.accounts.get(&accounts(1)).unwrap();
+    let account = contract.accounts.get(&user).unwrap();
     let grant = account.grants.get(&1000).unwrap();
     assert_eq!(grant.order_amount, U128::from(0)); // Orders declined
     assert_eq!(grant.total_amount, U128::from(2500)); // Reduced to unlocked amount
@@ -2626,20 +2310,15 @@ fn test_terminate_workflow_integration() {
 
 #[test]
 fn test_issue_workflow_integration() {
-    let mut context = get_context(accounts(1));
+    let admin = accounts(0);
+    let issuer = admin.clone();
+
+    let mut context = get_context(admin.clone());
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(10000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(10000);
+    grant_issuer(&mut contract, &issuer);
 
     // Issue grants
     let grants = vec![
@@ -2652,6 +2331,7 @@ fn test_issue_workflow_integration() {
     assert_eq!(contract.spare_balance, U128::from(2000)); // 10000 - 8000
 
     // Test that grants can be used in the vesting workflow
+    let mut context = get_context(accounts(1));
     context.block_timestamp(4000); // After full unlock
     testing_env!(context.build());
     contract.claim();
@@ -2674,16 +2354,7 @@ fn test_create_grant() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create a grant
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -2702,16 +2373,7 @@ fn test_create_grant_multiple_grants_same_account() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create multiple grants for the same account
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -2738,16 +2400,7 @@ fn test_create_grant_multiple_accounts() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create grants for different accounts
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -2776,16 +2429,7 @@ fn test_create_grant_overwrites_existing() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create initial grant
     contract.create_grant(accounts(1), 1000, U128::from(5000));
@@ -2812,16 +2456,7 @@ fn test_create_grant_workflow_integration() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Create a grant
     contract.create_grant(accounts(1), 1000, U128::from(10000));
@@ -2850,16 +2485,7 @@ fn test_pending_transfers_prevent_claim_buy_authorize() {
     context.block_timestamp(4000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(0),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(0);
 
     // Add a grant
     let mut account = Account {
@@ -2915,16 +2541,7 @@ fn test_authorize_pending_transfers_hashmap_structure() {
     context.block_timestamp(1000);
     testing_env!(context.build());
 
-    let mut contract = Contract {
-        token_id: accounts(0),
-        accounts: IterableMap::new(b"a".to_vec()),
-        config: Config {
-            cliff_duration: 1000,
-            full_unlock_duration: 2000,
-        },
-        spare_balance: U128::from(1000000),
-        pending_transfers: HashMap::new(),
-    };
+    let mut contract = init_contract_with_spare(1000000);
 
     // Add grants for two accounts with multiple grants each
     let mut account1 = Account {
@@ -2991,4 +2608,53 @@ fn test_authorize_pending_transfers_hashmap_structure() {
     let grant2_1500 = account2.grants.get(&1500).unwrap();
     assert_eq!(grant2_1500.claimed_amount, U128::from(2000));
     assert_eq!(grant2_1500.order_amount, U128::from(0));
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized role")]
+fn test_buy_requires_executor_role() {
+    set_predecessor(&accounts(2), 1000);
+
+    let mut contract = init_contract_with_spare(1000000);
+
+    let mut account = Account {
+        grants: HashMap::new(),
+    };
+    account.grants.insert(
+        1000,
+        Grant {
+            total_amount: U128::from(10000),
+            claimed_amount: U128::from(0),
+            order_amount: U128::from(5000),
+        },
+    );
+    contract.accounts.insert(accounts(1), account);
+
+    contract.buy(vec![accounts(1)], 5000);
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized role")]
+fn test_issue_requires_issuer_role() {
+    set_predecessor(&accounts(2), 1000);
+
+    let mut contract = init_contract_with_spare(10000);
+    let grants = vec![(accounts(1), U128::from(5000))];
+
+    contract.issue(1000, grants);
+}
+
+#[test]
+fn test_issue_with_issuer_role() {
+    set_predecessor(&accounts(0), 1000);
+
+    let mut contract = init_contract_with_spare(10000);
+    contract.create_grant(accounts(1), 500, U128::from(2000));
+
+    contract.issue(1000, vec![(accounts(2), U128::from(4000))]);
+
+    let account = contract.accounts.get(&accounts(2)).unwrap();
+    let grant = account.grants.get(&1000).unwrap();
+    assert_eq!(grant.total_amount, U128::from(4000));
+    assert_eq!(contract.spare_balance, U128::from(6000));
 }

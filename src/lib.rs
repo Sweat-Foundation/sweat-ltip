@@ -4,15 +4,30 @@ mod tests;
 use std::collections::HashMap;
 
 use near_sdk::env::log_str;
-use near_sdk::serde::de::IntoDeserializer;
-use near_sdk::serde_json;
+use near_sdk::{serde_json, BorshStorageKey};
 
 use near_sdk::{
     env, json_types::U128, near, store::IterableMap, AccountId, PanicOnDefault, Promise,
 };
+use near_sdk_contract_tools::{rbac::Rbac, Rbac};
+
+#[derive(BorshStorageKey)]
+#[near]
+pub enum Roles {
+    Admin,
+    Issuer,
+    Executor,
+}
+
+#[derive(BorshStorageKey)]
+#[near]
+enum StorageKey {
+    Accounts,
+}
 
 #[near(contract_state)]
-#[derive(PanicOnDefault)]
+#[derive(PanicOnDefault, Rbac)]
+#[rbac(roles = Roles)]
 pub struct Contract {
     pub token_id: AccountId,
     pub accounts: IterableMap<AccountId, Account>,
@@ -48,6 +63,29 @@ pub struct Config {
 
 #[near]
 impl Contract {
+    #[init]
+    pub fn init(
+        token_id: AccountId,
+        cliff_duration: u32,
+        full_unlock_duration: u32,
+        admin: AccountId,
+    ) -> Self {
+        let mut contract = Self {
+            token_id,
+            accounts: IterableMap::new(StorageKey::Accounts),
+            config: Config {
+                cliff_duration,
+                full_unlock_duration,
+            },
+            spare_balance: 0.into(),
+            pending_transfers: HashMap::new(),
+        };
+
+        contract.add_role(&admin, &Roles::Admin);
+
+        contract
+    }
+
     /**
      * A User can call this method to place orders to claim from their Grants.
      * A schedule of the Grants's unlock looks like this:
@@ -127,6 +165,8 @@ impl Contract {
      * 3. ft_transfer's must be collected in a single batched transaction.
      */
     pub fn authorize(&mut self, account_ids: Vec<AccountId>, percentage: Option<u32>) {
+        Self::require_role(&Roles::Executor);
+
         // If no percentage provided, default to 100% (10000 basis points)
         let percentage = percentage.unwrap_or(10000);
 
@@ -420,6 +460,8 @@ impl Contract {
      * This effectively cancels any pending orders and adjusts grants to their current vesting status.
      */
     pub fn terminate(&mut self, account_id: AccountId, timestamp: u64) {
+        Self::require_role(&Roles::Executor);
+
         // First, decline all orders for this account
         self.decline(vec![account_id.clone()]);
 
@@ -456,6 +498,8 @@ impl Contract {
      * Fails if the total amount exceeds the spare_balance.
      */
     pub fn issue(&mut self, issue_timestamp: u32, grants: Vec<(AccountId, U128)>) {
+        Self::require_role(&Roles::Issuer);
+
         // Calculate total amount to be issued
         let total_amount: u128 = grants.iter().map(|(_, amount)| amount.0).sum();
         let grants_count = grants.len();
@@ -494,6 +538,8 @@ impl Contract {
      * - set Grant.order_amount to 0
      */
     pub fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32) {
+        Self::require_role(&Roles::Executor);
+
         // If percentage is 0, decline all orders instead of processing them
         if percentage == 0 {
             self.decline(account_ids);
