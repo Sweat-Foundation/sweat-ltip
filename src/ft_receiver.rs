@@ -3,7 +3,8 @@ use near_sdk::{
     env::panic_str, json_types::U128, near, require, serde_json, AccountId, PromiseOrValue,
 };
 
-use crate::{Contract, ContractExt};
+use crate::{grant::GrantApi, Contract, ContractExt, Role};
+use near_sdk_contract_tools::rbac::Rbac;
 
 #[near(serializers = [json])]
 pub enum FtMessage {
@@ -22,7 +23,7 @@ pub struct IssueData {
 impl FungibleTokenReceiver for Contract {
     fn ft_on_transfer(
         &mut self,
-        _sender_id: AccountId,
+        sender_id: AccountId,
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
@@ -30,9 +31,9 @@ impl FungibleTokenReceiver for Contract {
             serde_json::from_str(&msg).unwrap_or_else(|_| panic_str("Failed to parse the message"));
 
         match message {
-            FtMessage::TopUp => self.on_top_up(amount),
-            FtMessage::Issue(issue_data) => self.on_issue(amount, issue_data),
-            FtMessage::Migrate(accounts) => self.on_migrate(amount, accounts),
+            FtMessage::TopUp => self.on_top_up(&sender_id, amount),
+            FtMessage::Issue(issue_data) => self.on_issue(&sender_id, amount, issue_data),
+            FtMessage::Migrate(accounts) => self.on_migrate(&sender_id, amount, accounts),
         }
 
         PromiseOrValue::Value(0.into())
@@ -40,11 +41,15 @@ impl FungibleTokenReceiver for Contract {
 }
 
 impl Contract {
-    fn on_top_up(&mut self, amount: U128) {
+    fn on_top_up(&mut self, sender_id: &AccountId, amount: U128) {
+        Self::has_role(sender_id, &Role::Issuer);
+
         self.spare_balance.0 += amount.0;
     }
 
-    fn on_issue(&mut self, amount: U128, issue_data: IssueData) {
+    fn on_issue(&mut self, sender_id: &AccountId, amount: U128, issue_data: IssueData) {
+        Self::has_role(sender_id, &Role::Issuer);
+
         let total_amount: u128 = issue_data.grants.iter().map(|(_, amount)| amount.0).sum();
         require!(
             total_amount == amount.0,
@@ -54,7 +59,14 @@ impl Contract {
         self.issue(issue_data.issue_date, issue_data.grants);
     }
 
-    fn on_migrate(&mut self, amount: U128, accounts: Vec<(AccountId, u32, U128, U128)>) {
+    fn on_migrate(
+        &mut self,
+        sender_id: &AccountId,
+        amount: U128,
+        accounts: Vec<(AccountId, u32, U128, U128)>,
+    ) {
+        Self::has_role(sender_id, &Role::Predecessor);
+
         let total_amount: u128 = accounts
             .iter()
             .map(|(_, _, total_amount, claimed_amount)| total_amount.0 - claimed_amount.0)
