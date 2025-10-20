@@ -1,4 +1,4 @@
-use crate::{auth::Role, Config, Contract, ContractExt, StorageKey};
+use crate::{Config, Contract, ContractExt, StorageKey};
 use near_sdk::{near, store::IterableMap, AccountId};
 use near_sdk_contract_tools::owner::Owner;
 
@@ -48,12 +48,13 @@ mod tests {
     use crate::{
         init::InitApi,
         testing_api::{init_contract_with_spare, set_predecessor},
+        Contract,
     };
 
     #[test]
     fn init_assigns_owner() {
         set_predecessor(&accounts(0), 0);
-        let contract = <crate::Contract as InitApi>::init(accounts(0), 10, 20, accounts(1));
+        let contract = Contract::new(accounts(0), 10, 20, accounts(1));
 
         assert_eq!(contract.own_get_owner().unwrap(), accounts(1));
     }
