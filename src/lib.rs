@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod event;
 mod ft_receiver;
 pub mod grant;
 pub mod init;

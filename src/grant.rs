@@ -1,10 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{Account, Contract, ContractExt, Grant, Role};
+use crate::{
+    event::{LtipEvent, OrderUpdateData},
+    Account, Contract, ContractExt, Grant, Role,
+};
 use near_sdk::{
     env, env::log_str, json_types::U128, near, serde_json, AccountId, Promise, PromiseResult,
 };
-use near_sdk_contract_tools::rbac::Rbac;
+use near_sdk_contract_tools::{rbac::Rbac, standard::nep297::Event};
 
 const GAS_PER_TRANSFER: near_sdk::Gas = near_sdk::Gas::from_tgas(10);
 const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
@@ -62,6 +65,8 @@ impl GrantApi for Contract {
             return;
         }
 
+        let mut event_data = vec![];
+
         for (issue_date, grant) in account.grants.iter_mut() {
             if pending_issue_dates.contains(issue_date) {
                 continue;
@@ -86,10 +91,16 @@ impl GrantApi for Contract {
 
             let outstanding = grant.claimed_amount.0 + grant.order_amount.0;
             if total_unlocked_amount > outstanding {
-                grant.order_amount =
-                    U128::from(grant.order_amount.0 + total_unlocked_amount - outstanding);
+                grant.order_amount.0 += total_unlocked_amount - outstanding;
             }
+
+            event_data.push(OrderUpdateData {
+                issue_date: issue_date.clone(),
+                amount: grant.order_amount,
+            });
         }
+
+        LtipEvent::OrderUpdate(event_data).emit();
     }
 
     fn authorize(&mut self, account_ids: Vec<AccountId>, percentage: Option<u32>) {
