@@ -32,8 +32,7 @@ pub fn set_predecessor_with_time(account: &AccountId, timestamp: u64) {
 }
 
 pub fn init_contract_with_spare(spare_balance: u128) -> Contract {
-    let mut contract =
-        <Contract as InitApi>::init(accounts(0), DEFAULT_CLIFF, DEFAULT_UNLOCK, accounts(0));
+    let mut contract = Contract::new(accounts(0), DEFAULT_CLIFF, DEFAULT_UNLOCK, accounts(0));
 
     contract.spare_balance = spare_balance.into();
     contract.add_role(&accounts(0), &Role::Executor);

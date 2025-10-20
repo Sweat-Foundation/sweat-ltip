@@ -1,11 +1,11 @@
 use crate::{auth::Role, Config, Contract, ContractExt, StorageKey};
 use near_sdk::{near, store::IterableMap, AccountId};
-use near_sdk_contract_tools::rbac::Rbac;
+use near_sdk_contract_tools::owner::Owner;
 
 /// InitApi covers the contract bootstrapping entry points.
 pub trait InitApi {
     /// Creates a fresh `Contract` configured with the supplied parameters.
-    fn init(
+    fn new(
         token_id: AccountId,
         cliff_duration: u32,
         full_unlock_duration: u32,
@@ -17,11 +17,11 @@ pub trait InitApi {
 impl InitApi for Contract {
     #[init]
     #[private]
-    fn init(
+    fn new(
         token_id: AccountId,
         cliff_duration: u32,
         full_unlock_duration: u32,
-        admin: AccountId,
+        owner_id: AccountId,
     ) -> Contract {
         let mut contract = Contract {
             token_id,
@@ -34,7 +34,7 @@ impl InitApi for Contract {
             pending_transfers: Default::default(),
         };
 
-        contract.add_role(&admin, &Role::Admin);
+        Owner::init(&mut contract, &owner_id);
 
         contract
     }
@@ -43,19 +43,19 @@ impl InitApi for Contract {
 #[cfg(test)]
 mod tests {
     use near_sdk::test_utils::accounts;
+    use near_sdk_contract_tools::owner::OwnerExternal;
 
     use crate::{
-        auth::{AuthApi, Role},
         init::InitApi,
         testing_api::{init_contract_with_spare, set_predecessor},
     };
 
     #[test]
-    fn init_assigns_admin_role() {
+    fn init_assigns_owner() {
         set_predecessor(&accounts(0), 0);
         let contract = <crate::Contract as InitApi>::init(accounts(0), 10, 20, accounts(1));
 
-        assert!(contract.has_role(&accounts(1), Role::Admin));
+        assert_eq!(contract.own_get_owner().unwrap(), accounts(1));
     }
 
     #[test]

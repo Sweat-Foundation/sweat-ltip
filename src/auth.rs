@@ -1,4 +1,5 @@
 use near_sdk::{near, AccountId, BorshStorageKey};
+use near_sdk_contract_tools::owner::Owner;
 use near_sdk_contract_tools::rbac::Rbac;
 
 use crate::{Contract, ContractExt};
@@ -6,7 +7,6 @@ use crate::{Contract, ContractExt};
 #[derive(BorshStorageKey)]
 #[near(serializers = [json, borsh])]
 pub enum Role {
-    Admin,
     Issuer,
     Executor,
     Predecessor,
@@ -27,13 +27,13 @@ pub trait AuthApi {
 #[near]
 impl AuthApi for Contract {
     fn grant_role(&mut self, account_id: &AccountId, role: Role) {
-        Self::require_role(&Role::Admin);
+        Self::require_owner();
 
         self.add_role(account_id, &role);
     }
 
     fn revoke_role(&mut self, account_id: &AccountId, role: Role) {
-        Self::require_role(&Role::Admin);
+        Self::require_owner();
 
         self.remove_role(account_id, &role);
     }
