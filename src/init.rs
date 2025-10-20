@@ -9,7 +9,7 @@ pub trait InitApi {
         token_id: AccountId,
         cliff_duration: u32,
         full_unlock_duration: u32,
-        admin: AccountId,
+        owner_id: AccountId,
     ) -> Contract;
 }
 

@@ -7,6 +7,8 @@ use crate::{grant::GrantApi, Contract, ContractExt, Role};
 use near_sdk_contract_tools::rbac::Rbac;
 
 #[near(serializers = [json])]
+#[serde(tag = "type", content = "data")]
+#[serde(rename_all = "snake_case")]
 pub enum FtMessage {
     TopUp,
     Issue(IssueData),

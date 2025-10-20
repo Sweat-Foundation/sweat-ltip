@@ -6,6 +6,7 @@ use crate::{Contract, ContractExt};
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [json, borsh])]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     Issuer,
     Executor,
