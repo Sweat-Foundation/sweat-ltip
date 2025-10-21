@@ -5,12 +5,21 @@ use crate::{
     Account, Contract, ContractExt, Grant, Role,
 };
 use near_sdk::{
-    env, env::log_str, json_types::U128, near, serde_json, AccountId, Promise, PromiseResult,
+    env, env::log_str, json_types::U128, near,
+    serde::{Deserialize, Serialize},
+    serde_json, AccountId, Promise, PromiseResult,
 };
 use near_sdk_contract_tools::{rbac::Rbac, standard::nep297::Event};
 
 const GAS_PER_TRANSFER: near_sdk::Gas = near_sdk::Gas::from_tgas(10);
 const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+pub struct TransferKey {
+    pub account_id: AccountId,
+    pub issue_date: u32,
+}
 
 /// GrantApi encapsulates vesting-related actions such as claiming, issuing, buybacks, and termination logic.
 pub trait GrantApi {
@@ -21,7 +30,7 @@ pub trait GrantApi {
     fn authorize(&mut self, account_ids: Vec<AccountId>, percentage: Option<u32>);
 
     /// Callback invoked after batched FT transfers to reconcile pending transfers with on-chain state.
-    fn on_authorize_complete(&mut self, total_transfers: u32);
+    fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>);
 
     /// Issues grants for the specified timestamp, reducing spare balance accordingly.
     fn issue(&mut self, issue_timestamp: u32, grants: Vec<(AccountId, U128)>);
@@ -114,6 +123,7 @@ impl GrantApi for Contract {
 
         self.pending_transfers.clear();
         let mut transfers = Vec::new();
+        let mut transfer_keys = Vec::new();
 
         for account_id in account_ids {
             let pending_issue_dates: HashSet<u32> = self
@@ -142,6 +152,10 @@ impl GrantApi for Contract {
 
                     grant.claimed_amount = U128::from(grant.claimed_amount.0 + authorized_amount);
                     transfers.push((account_id.clone(), authorized_amount));
+                    transfer_keys.push(TransferKey {
+                        account_id: account_id.clone(),
+                        issue_date: *issue_date,
+                    });
                     account_transfers.push((*issue_date, U128::from(authorized_amount)));
                     grant.order_amount = U128::from(0);
                 }
@@ -156,12 +170,6 @@ impl GrantApi for Contract {
         if transfers.is_empty() {
             return;
         }
-
-        let total_transfers: u32 = self
-            .pending_transfers
-            .values()
-            .map(|transfers| transfers.len() as u32)
-            .sum();
 
         let mut batch_promise = Promise::new(self.token_id.clone());
         for (account_id, amount) in transfers {
@@ -179,45 +187,56 @@ impl GrantApi for Contract {
 
         batch_promise.then(Promise::new(env::current_account_id()).function_call(
             "on_authorize_complete".to_string(),
-            serde_json::to_vec(&serde_json::json!({ "total_transfers": total_transfers })).unwrap(),
+            serde_json::to_vec(&serde_json::json!({
+                "transfer_keys": transfer_keys
+            }))
+            .unwrap(),
             env::attached_deposit(),
             GAS_FOR_CALLBACK,
         ));
     }
 
     #[private]
-    fn on_authorize_complete(&mut self, total_transfers: u32) {
-        log_str(&format!(
-            "Authorize batch completed: {} transfers processed",
-            total_transfers
-        ));
+    fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>) {
+        log_str(&format!("Authorize batch completed: {} transfers processed", transfer_keys.len()));
 
-        let mut transfer_index = 0;
-        for (account_id, account_transfers) in self.pending_transfers.iter() {
-            for (issue_date, failed_amount) in account_transfers {
-                #[allow(unreachable_patterns)]
-                match env::promise_result(transfer_index as u64) {
-                    PromiseResult::Successful(_) => {
-                        log_str(&format!("Transfer {} succeeded", transfer_index));
-                    }
-                    PromiseResult::Failed => {
-                        log_str(&format!(
-                            "Transfer {} failed, reverting claimed_amount",
-                            transfer_index
-                        ));
+        for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
+            #[allow(unreachable_patterns)]
+            match env::promise_result(transfer_index as u64) {
+                PromiseResult::Successful(_) => {
+                    log_str(&format!("Transfer {} succeeded", transfer_index));
+                }
+                PromiseResult::Failed => {
+                    log_str(&format!(
+                        "Transfer {} failed, reverting claimed_amount",
+                        transfer_index
+                    ));
 
-                        if let Some(account) = self.accounts.get_mut(account_id) {
-                            if let Some(grant) = account.grants.get_mut(issue_date) {
-                                grant.claimed_amount =
-                                    U128::from(grant.claimed_amount.0 - failed_amount.0);
-                                grant.order_amount =
-                                    U128::from(grant.order_amount.0 + failed_amount.0);
+                    let failed_amount = self
+                        .pending_transfers
+                        .get(&transfer_key.account_id)
+                        .and_then(|account_transfers| {
+                            account_transfers
+                                .iter()
+                                .find(|(issue_date, _)| issue_date == &transfer_key.issue_date)
+                                .map(|(_, amount)| amount.0)
+                        });
+
+                    if let Some(amount) = failed_amount {
+                        if let Some(account) = self.accounts.get_mut(&transfer_key.account_id) {
+                            if let Some(grant) = account.grants.get_mut(&transfer_key.issue_date) {
+                                grant.claimed_amount.0 -= amount;
+                                grant.order_amount.0 += amount;
                             }
                         }
+                    } else {
+                        log_str(&format!(
+                            "No pending transfer entry for {} at issue date {}",
+                            transfer_key.account_id, transfer_key.issue_date
+                        ));
                     }
-                    _ => {}
                 }
-                transfer_index += 1;
+                _ => {}
             }
         }
 
@@ -390,12 +409,15 @@ impl Contract {
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
 
-    use near_sdk::{json_types::U128, test_utils::accounts};
+    use near_sdk::{json_types::U128, test_utils::accounts, PromiseResult};
 
     use crate::{
         auth::{AuthApi, Role},
-        grant::GrantApi,
-        testing_api::{init_contract_with_grant, init_contract_with_spare, set_predecessor},
+        grant::{GrantApi, TransferKey},
+        testing_api::{
+            get_context, init_contract_with_grant, init_contract_with_spare, set_predecessor,
+            DEFAULT_CLIFF,
+        },
     };
 
     #[test]
@@ -467,10 +489,7 @@ mod tests {
 
         set_predecessor(&accounts(1), 0);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.issue(
-                1_000,
-                vec![(accounts(2), U128::from(1_000))],
-            );
+            contract.issue(1_000, vec![(accounts(2), U128::from(1_000))]);
         }));
 
         assert!(result.is_err());
@@ -506,14 +525,84 @@ mod tests {
 
         set_predecessor(&accounts(1), 0);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.authorize(
-                vec![accounts(1)],
-                Some(10_000),
-            );
+            contract.authorize(vec![accounts(1)], Some(10_000));
         }));
 
         assert!(result.is_err());
         assert!(contract.get_pending_transfers().is_empty());
+    }
+
+    #[test]
+    fn on_authorize_complete_reverts_failed_transfers_using_keys() {
+        let mut contract = init_contract_with_spare(0);
+        let account_one = accounts(1);
+        let account_two = accounts(2);
+
+        contract.create_grant_internal(&account_one, DEFAULT_CLIFF, U128::from(1_000), None);
+        contract.create_grant_internal(&account_two, DEFAULT_CLIFF, U128::from(1_000), None);
+
+        {
+            let grant = contract
+                .accounts
+                .get_mut(&account_one)
+                .unwrap()
+                .grants
+                .get_mut(&DEFAULT_CLIFF)
+                .unwrap();
+            grant.claimed_amount = U128::from(100);
+        }
+
+        {
+            let grant = contract
+                .accounts
+                .get_mut(&account_two)
+                .unwrap()
+                .grants
+                .get_mut(&DEFAULT_CLIFF)
+                .unwrap();
+            grant.claimed_amount = U128::from(200);
+        }
+
+        contract.pending_transfers.insert(
+            account_one.clone(),
+            vec![(DEFAULT_CLIFF, U128::from(100))],
+        );
+        contract.pending_transfers.insert(
+            account_two.clone(),
+            vec![(DEFAULT_CLIFF, U128::from(200))],
+        );
+
+        let context = get_context(accounts(0)).build();
+        near_sdk::testing_env!(
+            context,
+            near_sdk::test_vm_config(),
+            near_sdk::RuntimeFeesConfig::test(),
+            Default::default(),
+            vec![PromiseResult::Successful(vec![]), PromiseResult::Failed]
+        );
+
+        contract.on_authorize_complete(vec![
+            TransferKey {
+                account_id: account_two.clone(),
+                issue_date: DEFAULT_CLIFF,
+            },
+            TransferKey {
+                account_id: account_one.clone(),
+                issue_date: DEFAULT_CLIFF,
+            },
+        ]);
+
+        let account_one_state = contract.accounts.get(&account_one).unwrap();
+        let grant_one = account_one_state.grants.get(&DEFAULT_CLIFF).unwrap();
+        assert_eq!(grant_one.claimed_amount.0, 0);
+        assert_eq!(grant_one.order_amount.0, 100);
+
+        let account_two_state = contract.accounts.get(&account_two).unwrap();
+        let grant_two = account_two_state.grants.get(&DEFAULT_CLIFF).unwrap();
+        assert_eq!(grant_two.claimed_amount.0, 200);
+        assert_eq!(grant_two.order_amount.0, 0);
+
+        assert!(contract.pending_transfers.is_empty());
     }
 
     #[test]
