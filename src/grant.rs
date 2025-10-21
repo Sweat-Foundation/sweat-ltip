@@ -388,6 +388,8 @@ impl Contract {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{self, AssertUnwindSafe};
+
     use near_sdk::{json_types::U128, test_utils::accounts};
 
     use crate::{
@@ -401,7 +403,7 @@ mod tests {
         let mut contract = init_contract_with_grant(U128::from(10_000));
         set_predecessor(&accounts(1), 1_500);
 
-        <crate::Contract as GrantApi>::claim(&mut contract);
+        contract.claim();
 
         let account = contract.accounts.get(&accounts(1)).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
@@ -413,7 +415,7 @@ mod tests {
         let mut contract = init_contract_with_grant(U128::from(10_000));
         set_predecessor(&accounts(1), 4_000);
 
-        <crate::Contract as GrantApi>::claim(&mut contract);
+        contract.claim();
 
         let account = contract.accounts.get(&accounts(1)).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
@@ -433,7 +435,7 @@ mod tests {
         }
 
         set_predecessor(&accounts(0), 0);
-        <crate::Contract as GrantApi>::buy(&mut contract, vec![user.clone()], 5_000);
+        contract.buy(vec![user.clone()], 5_000);
 
         let account = contract.accounts.get(&user).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
@@ -447,8 +449,7 @@ mod tests {
         let mut contract = init_contract_with_spare(10_000);
         set_predecessor(&accounts(0), 0);
 
-        <crate::Contract as GrantApi>::issue(
-            &mut contract,
+        contract.issue(
             1_000,
             vec![
                 (accounts(1), U128::from(3_000)),
@@ -458,6 +459,23 @@ mod tests {
 
         assert_eq!(contract.spare_balance.0, 5_000);
         assert!(contract.accounts.get(&accounts(1)).is_some());
+    }
+
+    #[test]
+    fn issue_requires_issuer_role() {
+        let mut contract = init_contract_with_spare(10_000);
+
+        set_predecessor(&accounts(1), 0);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.issue(
+                1_000,
+                vec![(accounts(2), U128::from(1_000))],
+            );
+        }));
+
+        assert!(result.is_err());
+        assert!(contract.accounts.get(&accounts(2)).is_none());
+        assert_eq!(contract.spare_balance.0, 10_000);
     }
 
     #[test]
@@ -474,12 +492,28 @@ mod tests {
         set_predecessor(&accounts(0), 0);
         contract.grant_role(&accounts(0), Role::Executor);
 
-        <crate::Contract as GrantApi>::authorize(&mut contract, vec![user.clone()], Some(5_000));
+        contract.authorize(vec![user.clone()], Some(5_000));
 
         let pending = contract.get_pending_transfers();
         assert!(pending.contains_key(&user));
         let transfers = pending.get(&user).unwrap();
         assert_eq!(transfers[0].1 .0, 2_000);
+    }
+
+    #[test]
+    fn authorize_requires_executor_role() {
+        let mut contract = init_contract_with_grant(U128::from(10_000));
+
+        set_predecessor(&accounts(1), 0);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.authorize(
+                vec![accounts(1)],
+                Some(10_000),
+            );
+        }));
+
+        assert!(result.is_err());
+        assert!(contract.get_pending_transfers().is_empty());
     }
 
     #[test]
@@ -495,11 +529,60 @@ mod tests {
         }
 
         set_predecessor(&accounts(0), 0);
-        <crate::Contract as GrantApi>::terminate(&mut contract, user.clone(), 1_500);
+        contract.terminate(user.clone(), 1_500);
 
         let account = contract.accounts.get(&user).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
         assert_eq!(grant.order_amount.0, 0);
         assert_eq!(grant.total_amount.0, 2_000);
+    }
+
+    #[test]
+    fn buy_requires_executor_role() {
+        let mut contract = init_contract_with_grant(U128::from(10_000));
+        let user = accounts(1);
+
+        {
+            let account = contract.accounts.get_mut(&user).unwrap();
+            let grant = account.grants.get_mut(&1_000).unwrap();
+            grant.order_amount = U128::from(4_000);
+        }
+
+        set_predecessor(&accounts(2), 0);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.buy(vec![user.clone()], 5_000);
+        }));
+
+        assert!(result.is_err());
+        let grant = contract
+            .accounts
+            .get(&user)
+            .unwrap()
+            .grants
+            .get(&1_000)
+            .unwrap();
+        assert_eq!(grant.order_amount.0, 4_000);
+        assert_eq!(grant.claimed_amount.0, 0);
+    }
+
+    #[test]
+    fn terminate_requires_executor_role() {
+        let mut contract = init_contract_with_grant(U128::from(10_000));
+        let user = accounts(1);
+
+        set_predecessor(&accounts(2), 0);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.terminate(user.clone(), 1_500);
+        }));
+
+        assert!(result.is_err());
+        let grant = contract
+            .accounts
+            .get(&user)
+            .unwrap()
+            .grants
+            .get(&1_000)
+            .unwrap();
+        assert_eq!(grant.total_amount.0, 10_000);
     }
 }
