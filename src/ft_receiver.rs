@@ -4,7 +4,7 @@ use near_sdk::{
 };
 
 use crate::{grant::GrantApi, Contract, ContractExt, Role};
-use near_sdk_contract_tools::rbac::Rbac;
+use near_sdk_contract_tools::{pause::Pause, rbac::Rbac};
 
 #[near(serializers = [json])]
 #[serde(tag = "type", content = "data")]
@@ -68,6 +68,7 @@ impl Contract {
         accounts: Vec<(AccountId, u32, U128, U128)>,
     ) {
         Self::has_role(sender_id, &Role::Predecessor);
+        Self::require_unpaused();
 
         let total_amount: u128 = accounts
             .iter()

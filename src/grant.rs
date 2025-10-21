@@ -5,17 +5,15 @@ use crate::{
     Account, Contract, ContractExt, Grant, Role,
 };
 use near_sdk::{
-    env, env::log_str, json_types::U128, near,
-    serde::{Deserialize, Serialize},
-    serde_json, AccountId, Promise, PromiseResult,
+    env, env::log_str, json_types::U128, near, serde_json, AccountId, Promise, PromiseResult,
 };
-use near_sdk_contract_tools::{rbac::Rbac, standard::nep297::Event};
+use near_sdk_contract_tools::{pause::Pause, rbac::Rbac, standard::nep297::Event};
 
 const GAS_PER_TRANSFER: near_sdk::Gas = near_sdk::Gas::from_tgas(10);
 const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(crate = "near_sdk::serde")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[near(serializers = [json])]
 pub struct TransferKey {
     pub account_id: AccountId,
     pub issue_date: u32,
@@ -57,6 +55,8 @@ pub trait GrantApi {
 #[near]
 impl GrantApi for Contract {
     fn claim(&mut self) {
+        Self::require_unpaused();
+
         let caller = env::predecessor_account_id();
         let current_timestamp = env::block_timestamp();
 
@@ -114,6 +114,9 @@ impl GrantApi for Contract {
 
     fn authorize(&mut self, account_ids: Vec<AccountId>, percentage: Option<u32>) {
         Self::require_role(&Role::Executor);
+        Self::require_unpaused();
+
+        self.pause();
 
         let percentage = percentage.unwrap_or(10_000);
         if percentage == 0 {
@@ -185,20 +188,25 @@ impl GrantApi for Contract {
             );
         }
 
-        batch_promise.then(Promise::new(env::current_account_id()).function_call(
-            "on_authorize_complete".to_string(),
-            serde_json::to_vec(&serde_json::json!({
-                "transfer_keys": transfer_keys
-            }))
-            .unwrap(),
-            env::attached_deposit(),
-            GAS_FOR_CALLBACK,
-        ));
+        batch_promise.then(
+            Promise::new(env::current_account_id()).function_call(
+                "on_authorize_complete".to_string(),
+                serde_json::to_vec(&serde_json::json!({
+                    "transfer_keys": transfer_keys
+                }))
+                .unwrap(),
+                env::attached_deposit(),
+                GAS_FOR_CALLBACK,
+            ),
+        );
     }
 
     #[private]
     fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>) {
-        log_str(&format!("Authorize batch completed: {} transfers processed", transfer_keys.len()));
+        log_str(&format!(
+            "Authorize batch completed: {} transfers processed",
+            transfer_keys.len()
+        ));
 
         for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
             #[allow(unreachable_patterns)]
@@ -241,10 +249,12 @@ impl GrantApi for Contract {
         }
 
         self.pending_transfers.clear();
+        self.unpause();
     }
 
     fn issue(&mut self, issue_timestamp: u32, grants: Vec<(AccountId, U128)>) {
         Self::require_role(&Role::Issuer);
+        Self::require_unpaused();
 
         let total_amount: u128 = grants.iter().map(|(_, amount)| amount.0).sum();
         if total_amount > self.spare_balance.0 {
@@ -268,6 +278,7 @@ impl GrantApi for Contract {
 
     fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32) {
         Self::require_role(&Role::Executor);
+        Self::require_unpaused();
 
         if percentage == 0 {
             self.decline_orders(account_ids);
@@ -327,6 +338,7 @@ impl GrantApi for Contract {
 
     fn terminate(&mut self, account_id: AccountId, timestamp: u64) {
         Self::require_role(&Role::Executor);
+        Self::require_unpaused();
 
         self.decline_orders(vec![account_id.clone()]);
 
@@ -563,14 +575,12 @@ mod tests {
             grant.claimed_amount = U128::from(200);
         }
 
-        contract.pending_transfers.insert(
-            account_one.clone(),
-            vec![(DEFAULT_CLIFF, U128::from(100))],
-        );
-        contract.pending_transfers.insert(
-            account_two.clone(),
-            vec![(DEFAULT_CLIFF, U128::from(200))],
-        );
+        contract
+            .pending_transfers
+            .insert(account_one.clone(), vec![(DEFAULT_CLIFF, U128::from(100))]);
+        contract
+            .pending_transfers
+            .insert(account_two.clone(), vec![(DEFAULT_CLIFF, U128::from(200))]);
 
         let context = get_context(accounts(0)).build();
         near_sdk::testing_env!(

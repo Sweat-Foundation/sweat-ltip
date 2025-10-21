@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use near_sdk::{
     json_types::U128, near, store::IterableMap, AccountId, BorshStorageKey, PanicOnDefault,
 };
-use near_sdk_contract_tools::{Owner, Rbac, Upgrade};
+use near_sdk_contract_tools::{Owner, Pause, Rbac, Upgrade};
 
 pub use auth::Role;
 
@@ -20,10 +20,12 @@ pub use auth::Role;
 #[near]
 pub(crate) enum StorageKey {
     Accounts,
+    Pause,
 }
 
 #[near(contract_state)]
-#[derive(Owner, PanicOnDefault, Rbac, Upgrade)]
+#[derive(Owner, PanicOnDefault, Pause, Rbac, Upgrade)]
+#[pause(storage_key = StorageKey::Pause)]
 #[rbac(roles = Role)]
 #[upgrade(serializer = "borsh", hook = "owner")]
 pub struct Contract {
