@@ -1,43 +1,45 @@
 # sweat-ltip
 
-cargo-near-new-project-description
+## Purpose
 
-## How to Build Locally?
+`sweat-ltip` is a NEAR smart contract that powers long-term incentive plan (LTIP) grants for Sweat Economy contributors. It manages vesting schedules, authorizes token payouts, supports clawbacks such as buybacks or terminations, and keeps spare treasury balances in sync with grant activity.
 
-Install [`cargo-near`](https://github.com/near/cargo-near) and run:
+## Prerequisites
+
+- `rustup` with the toolchain pinned to Rust `1.86.0` (automatically picked up from `rust-toolchain.toml`)
+- `cargo` and standard Rust build tooling
+- [`cargo-near`](https://github.com/near/cargo-near) for reproducible WASM builds and deployments
+- Optional: [`near-cli`](https://near.cli.rs) if you plan to interact with a live NEAR network
+
+Install the Rust toolchain and `cargo-near` if needed:
 
 ```bash
-cargo near build
+rustup target add wasm32-unknown-unknown
+cargo install cargo-near
 ```
 
-## How to Test Locally?
+## Build
+
+Compile the contract to a WASM artifact using the provided Makefile target (non-reproducible build):
 
 ```bash
-cargo test
+make build
 ```
 
-## How to Deploy?
+For a reproducible (release) build, run:
 
-Deployment is automated with GitHub Actions CI/CD pipeline.
-To deploy manually, install [`cargo-near`](https://github.com/near/cargo-near) and run:
-
-If you deploy for debugging purposes:
 ```bash
-cargo near deploy build-non-reproducible-wasm <account-id>
+make build-release
 ```
 
-If you deploy production ready smart contract:
+Both targets delegate to `cargo near` and copy the resulting artifacts (WASM and ABI) into the `res/` directory.
+
+## Test
+
+Run the unit and integration test suites locally:
+
 ```bash
-cargo near deploy build-reproducible-wasm <account-id>
+make test
 ```
 
-## Useful Links
-
-- [cargo-near](https://github.com/near/cargo-near) - NEAR smart contract development toolkit for Rust
-- [near CLI](https://near.cli.rs) - Interact with NEAR blockchain from command line
-- [NEAR Rust SDK Documentation](https://docs.near.org/sdk/rust/introduction)
-- [NEAR Documentation](https://docs.near.org)
-- [NEAR StackOverflow](https://stackoverflow.com/questions/tagged/nearprotocol)
-- [NEAR Discord](https://near.chat)
-- [NEAR Telegram Developers Community Group](https://t.me/neardev)
-- NEAR DevHub: [Telegram](https://t.me/neardevhub), [Twitter](https://twitter.com/neardevhub)
+The tests rely on `near-sdk`’s in-memory sandbox; no external NEAR node is required.
