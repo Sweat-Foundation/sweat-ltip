@@ -207,6 +207,7 @@ impl GrantApi for Contract {
             "Authorize batch completed: {} transfers processed",
             transfer_keys.len()
         ));
+        Self::require_paused();
 
         for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
             #[allow(unreachable_patterns)]
@@ -422,6 +423,7 @@ mod tests {
     use std::panic::{self, AssertUnwindSafe};
 
     use near_sdk::{json_types::U128, test_utils::accounts, PromiseResult};
+    use near_sdk_contract_tools::pause::Pause;
 
     use crate::{
         auth::{AuthApi, Role},
@@ -591,6 +593,7 @@ mod tests {
             vec![PromiseResult::Successful(vec![]), PromiseResult::Failed]
         );
 
+        contract.pause();
         contract.on_authorize_complete(vec![
             TransferKey {
                 account_id: account_two.clone(),
