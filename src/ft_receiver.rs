@@ -52,12 +52,7 @@ impl Contract {
     fn on_issue(&mut self, sender_id: &AccountId, amount: U128, issue_data: IssueData) {
         Self::has_role(sender_id, &Role::Issuer);
 
-        let total_amount: u128 = issue_data.grants.iter().map(|(_, amount)| amount.0).sum();
-        require!(
-            total_amount == amount.0,
-            "Transferred amount doesn't match total grants amount"
-        );
-
+        self.spare_balance.0 += amount.0;
         self.issue(issue_data.issue_date, issue_data.grants);
     }
 
