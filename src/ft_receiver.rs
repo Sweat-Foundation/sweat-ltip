@@ -44,13 +44,13 @@ impl FungibleTokenReceiver for Contract {
 
 impl Contract {
     fn on_top_up(&mut self, sender_id: &AccountId, amount: U128) {
-        Self::has_role(sender_id, &Role::Issuer);
+        require!(Self::has_role(sender_id, &Role::Issuer));
 
         self.spare_balance.0 += amount.0;
     }
 
     fn on_issue(&mut self, sender_id: &AccountId, amount: U128, issue_data: IssueData) {
-        Self::has_role(sender_id, &Role::Issuer);
+        require!(Self::has_role(sender_id, &Role::Issuer));
 
         self.spare_balance.0 += amount.0;
         self.issue(issue_data.issue_date, issue_data.grants);
@@ -62,7 +62,7 @@ impl Contract {
         amount: U128,
         accounts: Vec<(AccountId, u32, U128, U128)>,
     ) {
-        Self::has_role(sender_id, &Role::Predecessor);
+        require!(Self::has_role(sender_id, &Role::Predecessor));
         Self::require_unpaused();
 
         let total_amount: u128 = accounts
