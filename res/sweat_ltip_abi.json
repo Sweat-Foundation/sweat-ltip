@@ -7,7 +7,7 @@
       "compiler": "rustc 1.86.0",
       "builder": "cargo-near cargo-near-build 0.9.0"
     },
-    "wasm_hash": "FNXdAoHnzh75fzB3LzS7NM7pvRSCPKBAyBLX9EaiRbiq"
+    "wasm_hash": "5gDLYephhcdT7AZdRPFt3vmyxJR5i2zLKz81RFmLT7Yc"
   },
   "body": {
     "functions": [
@@ -263,7 +263,7 @@
           "serialization_type": "json",
           "args": [
             {
-              "name": "issue_timestamp",
+              "name": "issue_at",
               "type_schema": {
                 "type": "integer",
                 "format": "uint32",
@@ -585,14 +585,14 @@
           "type": "object",
           "required": [
             "account_id",
-            "issue_date"
+            "issue_at"
           ],
           "properties": {
             "account_id": {
               "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
               "type": "string"
             },
-            "issue_date": {
+            "issue_at": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0.0

@@ -21,14 +21,14 @@ export function createTest(): TestFn<Context> {
     const issuer = await root.createSubAccount('issuer');
     const executor = await root.createSubAccount('executor');
 
-    const sweat = await prepareFtContract(root, owner);
-    const contract = await prepareLtipContract(root, sweat, owner, issuer, executor);
+    const ft = await prepareFtContract(root, owner);
+    const contract = await prepareLtipContract(root, ft, owner, issuer, executor);
 
-    await storageDeposit(sweat, [contract, alice, issuer, executor]);
-    await fundAccounts(sweat, owner, [issuer, alice]);
+    await storageDeposit(ft, [contract, alice, bob, issuer, executor]);
+    await fundAccounts(ft, [issuer, alice]);
 
     t.context.worker = worker;
-    t.context.accounts = { root, contract, sweat, alice, bob, owner, issuer, executor };
+    t.context.accounts = { root, contract, ft, alice, bob, owner, issuer, executor };
   });
 
   test.after(async t => {
@@ -53,22 +53,22 @@ async function prepareFtContract(root: NearAccount, owner: NearAccount): Promise
   return ft;
 }
 
-async function prepareLtipContract(root: NearAccount, sweat: NearAccount, owner: NearAccount, issuer: NearAccount, executor: NearAccount): Promise<NearAccount> {
+async function prepareLtipContract(root: NearAccount, ft: NearAccount, owner: NearAccount, issuer: NearAccount, executor: NearAccount): Promise<NearAccount> {
   console.log('🚢 Deploy LTIP contract');
   const contract = await root.devDeploy('../res/sweat_ltip.wasm');
 
   console.log('  ➤ Call contract.new');
   await contract.call(contract, 'new', {
-    token_id: sweat.accountId,
+    token_id: ft.accountId,
     cliff_duration: 31536000,
     full_unlock_duration: 94608000,
     owner_id: owner.accountId
   });
 
-  console.log('  ➤ Call contract.grant_role');
+  console.log('  ➤ Call contract.grant_role(issuer, issuer)');
   await owner.call(contract, 'grant_role', { account_id: issuer.accountId, role: 'issuer' });
 
-  console.log('  ➤ Call contract.grant_role');
+  console.log('  ➤ Call contract.grant_role(executor, executor)');
   await owner.call(contract, 'grant_role', { account_id: executor.accountId, role: 'executor' });
 
   return contract;
@@ -88,13 +88,13 @@ async function storageDeposit(ft: NearAccount, accounts: Array<NearAccount>): Pr
   }
 }
 
-async function fundAccounts(sweat: NearAccount, owner: NearAccount, accounts: Array<NearAccount>): Promise<void> {
+async function fundAccounts(ft: NearAccount, accounts: Array<NearAccount>): Promise<void> {
   console.log('💸 Fund accounts');
   for (var account of accounts) {
     console.log('  ➤ Funding', account.accountId);
 
-    await sweat.call(
-      sweat,
+    await ft.call(
+      ft,
       'tge_mint',
       { account_id: account.accountId, amount: '100000000000000000000000000' }
     );

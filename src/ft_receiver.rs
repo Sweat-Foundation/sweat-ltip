@@ -17,7 +17,7 @@ pub enum FtMessage {
 
 #[near(serializers = [json])]
 pub struct IssueData {
-    pub issue_date: u32,
+    pub issue_at: u32,
     pub grants: Vec<(AccountId, U128)>,
 }
 
@@ -53,7 +53,7 @@ impl Contract {
         require!(Self::has_role(sender_id, &Role::Issuer));
 
         self.spare_balance.0 += amount.0;
-        self.issue(issue_data.issue_date, issue_data.grants);
+        self.issue_internal(issue_data.issue_at, issue_data.grants);
     }
 
     fn on_migrate(
@@ -74,8 +74,8 @@ impl Contract {
             "Transferred amount doesn't match total grants amount"
         );
 
-        for (account_id, issue_date, total_amount, claimed_amount) in accounts.into_iter() {
-            self.create_grant_internal(&account_id, issue_date, total_amount, Some(claimed_amount));
+        for (account_id, issue_at, total_amount, claimed_amount) in accounts.into_iter() {
+            self.create_grant_internal(&account_id, issue_at, total_amount, Some(claimed_amount));
         }
     }
 }

@@ -7,3 +7,7 @@ export type Grant = {
 export type Account = {
   grants: Record<number, Grant>;
 };
+
+export function sweat(n: number): bigint {
+  return BigInt(n) * (10n ** 18n);
+}

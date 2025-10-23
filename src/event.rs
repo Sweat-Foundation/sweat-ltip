@@ -10,6 +10,6 @@ pub enum LtipEvent {
 
 #[near(serializers = [json])]
 pub struct OrderUpdateData {
-    pub issue_date: u32,
+    pub issue_at: u32,
     pub amount: U128,
 }
