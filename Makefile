@@ -1,7 +1,11 @@
-.PHONY: test build build-release
+.PHONY: test build build-release int
 
 test:
 	cargo test
+
+int:
+	$(MAKE) build
+	cd integration-tests && npm test
 
 build:
 	cargo near build non-reproducible-wasm --out-dir res

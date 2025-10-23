@@ -38,7 +38,7 @@ async fn run_integration_flow(contract_wasm: &[u8]) -> Result<(), Box<dyn std::e
         .call(contract.id(), "create_grant")
         .args_json(json!({
             "account_id": beneficiary.id(),
-            "issue_date": 1_000u32,
+            "issue_at": 1_000u32,
             "total_amount": "5000",
         }))
         .transact()

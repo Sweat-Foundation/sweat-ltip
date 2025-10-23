@@ -5,7 +5,9 @@ use crate::{
     Account, Contract, ContractExt, Grant, Role,
 };
 use near_sdk::{
-    env, env::log_str, json_types::U128, near, serde_json, AccountId, Promise, PromiseResult,
+    env::{self, log_str},
+    json_types::U128,
+    near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
 };
 use near_sdk_contract_tools::{pause::Pause, rbac::Rbac, standard::nep297::Event};
 
@@ -16,7 +18,7 @@ const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
 #[near(serializers = [json])]
 pub struct TransferKey {
     pub account_id: AccountId,
-    pub issue_date: u32,
+    pub issue_at: u32,
 }
 
 /// GrantApi encapsulates vesting-related actions such as claiming, issuing, buybacks, and termination logic.
@@ -31,7 +33,7 @@ pub trait GrantApi {
     fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>);
 
     /// Issues grants for the specified timestamp, reducing spare balance accordingly.
-    fn issue(&mut self, issue_timestamp: u32, grants: Vec<(AccountId, U128)>);
+    fn issue(&mut self, issue_at: u32, grants: Vec<(AccountId, U128)>);
 
     /// Executes a buyback against the provided accounts by the given percentage (basis points).
     fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32);
@@ -60,7 +62,7 @@ impl GrantApi for Contract {
         let caller = env::predecessor_account_id();
         let current_timestamp = env::block_timestamp();
 
-        let pending_issue_dates: HashSet<u32> = self
+        let pending_issue_ats: HashSet<u32> = self
             .pending_transfers
             .get(&caller)
             .map(|transfers| transfers.iter().map(|(date, _)| *date).collect())
@@ -76,12 +78,12 @@ impl GrantApi for Contract {
 
         let mut event_data = vec![];
 
-        for (issue_date, grant) in account.grants.iter_mut() {
-            if pending_issue_dates.contains(issue_date) {
+        for (issue_at, grant) in account.grants.iter_mut() {
+            if pending_issue_ats.contains(issue_at) {
                 continue;
             }
 
-            let cliff_end = (*issue_date as u64) + (self.config.cliff_duration as u64);
+            let cliff_end = (*issue_at as u64) + (self.config.cliff_duration as u64);
             let full_unlock = cliff_end + (self.config.full_unlock_duration as u64);
 
             if current_timestamp < cliff_end {
@@ -104,7 +106,7 @@ impl GrantApi for Contract {
             }
 
             event_data.push(OrderUpdateData {
-                issue_date: issue_date.clone(),
+                issue_at: issue_at.clone(),
                 amount: grant.order_amount,
             });
         }
@@ -129,7 +131,7 @@ impl GrantApi for Contract {
         let mut transfer_keys = Vec::new();
 
         for account_id in account_ids {
-            let pending_issue_dates: HashSet<u32> = self
+            let pending_issue_ats: HashSet<u32> = self
                 .pending_transfers
                 .get(&account_id)
                 .map(|transfers| transfers.iter().map(|(date, _)| *date).collect())
@@ -138,8 +140,8 @@ impl GrantApi for Contract {
             if let Some(account) = self.accounts.get_mut(&account_id) {
                 let mut account_transfers = Vec::new();
 
-                for (issue_date, grant) in account.grants.iter_mut() {
-                    if pending_issue_dates.contains(issue_date) {
+                for (issue_at, grant) in account.grants.iter_mut() {
+                    if pending_issue_ats.contains(issue_at) {
                         continue;
                     }
 
@@ -157,9 +159,9 @@ impl GrantApi for Contract {
                     transfers.push((account_id.clone(), authorized_amount));
                     transfer_keys.push(TransferKey {
                         account_id: account_id.clone(),
-                        issue_date: *issue_date,
+                        issue_at: *issue_at,
                     });
-                    account_transfers.push((*issue_date, U128::from(authorized_amount)));
+                    account_transfers.push((*issue_at, U128::from(authorized_amount)));
                     grant.order_amount = U128::from(0);
                 }
 
@@ -183,7 +185,7 @@ impl GrantApi for Contract {
                     "amount": amount.to_string()
                 }))
                 .unwrap(),
-                env::attached_deposit(),
+                NearToken::from_yoctonear(1),
                 GAS_PER_TRANSFER,
             );
         }
@@ -195,7 +197,7 @@ impl GrantApi for Contract {
                     "transfer_keys": transfer_keys
                 }))
                 .unwrap(),
-                env::attached_deposit(),
+                NearToken::from_yoctonear(0),
                 GAS_FOR_CALLBACK,
             ),
         );
@@ -227,13 +229,13 @@ impl GrantApi for Contract {
                         .and_then(|account_transfers| {
                             account_transfers
                                 .iter()
-                                .find(|(issue_date, _)| issue_date == &transfer_key.issue_date)
+                                .find(|(issue_at, _)| issue_at == &transfer_key.issue_at)
                                 .map(|(_, amount)| amount.0)
                         });
 
                     if let Some(amount) = failed_amount {
                         if let Some(account) = self.accounts.get_mut(&transfer_key.account_id) {
-                            if let Some(grant) = account.grants.get_mut(&transfer_key.issue_date) {
+                            if let Some(grant) = account.grants.get_mut(&transfer_key.issue_at) {
                                 grant.claimed_amount.0 -= amount;
                                 grant.order_amount.0 += amount;
                             }
@@ -241,7 +243,7 @@ impl GrantApi for Contract {
                     } else {
                         log_str(&format!(
                             "No pending transfer entry for {} at issue date {}",
-                            transfer_key.account_id, transfer_key.issue_date
+                            transfer_key.account_id, transfer_key.issue_at
                         ));
                     }
                 }
@@ -253,28 +255,10 @@ impl GrantApi for Contract {
         self.unpause();
     }
 
-    fn issue(&mut self, issue_timestamp: u32, grants: Vec<(AccountId, U128)>) {
+    fn issue(&mut self, issue_at: u32, grants: Vec<(AccountId, U128)>) {
         Self::require_role(&Role::Issuer);
-        Self::require_unpaused();
 
-        let total_amount: u128 = grants.iter().map(|(_, amount)| amount.0).sum();
-        if total_amount > self.spare_balance.0 {
-            env::panic_str(&format!(
-                "Insufficient spare balance: required {}, available {}",
-                total_amount, self.spare_balance.0
-            ));
-        }
-
-        for (account_id, amount) in grants {
-            self.create_grant_internal(&account_id, issue_timestamp, amount, None);
-        }
-
-        self.spare_balance = U128::from(self.spare_balance.0 - total_amount);
-
-        log_str(&format!(
-            "Issued grants with total amount {} at timestamp {}",
-            total_amount, issue_timestamp
-        ));
+        self.issue_internal(issue_at, grants);
     }
 
     fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32) {
@@ -287,15 +271,15 @@ impl GrantApi for Contract {
         }
 
         for account_id in account_ids {
-            let pending_issue_dates: HashSet<u32> = self
+            let pending_issue_ats: HashSet<u32> = self
                 .pending_transfers
                 .get(&account_id)
                 .map(|transfers| transfers.iter().map(|(date, _)| *date).collect())
                 .unwrap_or_default();
 
             if let Some(account) = self.accounts.get_mut(&account_id) {
-                for (issue_date, grant) in account.grants.iter_mut() {
-                    if pending_issue_dates.contains(issue_date) {
+                for (issue_at, grant) in account.grants.iter_mut() {
+                    if pending_issue_ats.contains(issue_at) {
                         continue;
                     }
 
@@ -316,9 +300,9 @@ impl GrantApi for Contract {
     fn get_orders(&self) -> Vec<(AccountId, u32, U128)> {
         let mut orders = Vec::new();
         for (account_id, account) in self.accounts.iter() {
-            for (issue_date, grant) in account.grants.iter() {
+            for (issue_at, grant) in account.grants.iter() {
                 if grant.order_amount.0 > 0 {
-                    orders.push((account_id.clone(), *issue_date, grant.order_amount));
+                    orders.push((account_id.clone(), *issue_at, grant.order_amount));
                 }
             }
         }
@@ -344,8 +328,8 @@ impl GrantApi for Contract {
         self.decline_orders(vec![account_id.clone()]);
 
         if let Some(account) = self.accounts.get_mut(&account_id) {
-            for (issue_date, grant) in account.grants.iter_mut() {
-                let cliff_end = (*issue_date as u64) + (self.config.cliff_duration as u64);
+            for (issue_at, grant) in account.grants.iter_mut() {
+                let cliff_end = (*issue_at as u64) + (self.config.cliff_duration as u64);
                 let full_unlock = cliff_end + (self.config.full_unlock_duration as u64);
 
                 let unlocked_amount = if timestamp < cliff_end {
@@ -360,7 +344,10 @@ impl GrantApi for Contract {
                         / unlock_period_duration as u128
                 };
 
-                grant.total_amount = unlocked_amount.max(grant.claimed_amount.0).into();
+                let updated_amount = unlocked_amount.max(grant.claimed_amount.0);
+
+                self.spare_balance.0 += grant.total_amount.0 - updated_amount;
+                grant.total_amount = updated_amount.into();
             }
         }
     }
@@ -369,15 +356,15 @@ impl GrantApi for Contract {
 impl Contract {
     fn decline_orders(&mut self, account_ids: Vec<AccountId>) {
         for account_id in account_ids {
-            let pending_issue_dates: HashSet<u32> = self
+            let pending_issue_ats: HashSet<u32> = self
                 .pending_transfers
                 .get(&account_id)
                 .map(|transfers| transfers.iter().map(|(date, _)| *date).collect())
                 .unwrap_or_default();
 
             if let Some(account) = self.accounts.get_mut(&account_id) {
-                for (issue_date, grant) in account.grants.iter_mut() {
-                    if !pending_issue_dates.contains(issue_date) {
+                for (issue_at, grant) in account.grants.iter_mut() {
+                    if !pending_issue_ats.contains(issue_at) {
                         grant.order_amount = U128::from(0);
                     }
                 }
@@ -393,7 +380,7 @@ impl Contract {
     pub(crate) fn create_grant_internal(
         &mut self,
         account_id: &AccountId,
-        issue_date: u32,
+        issue_at: u32,
         total_amount: U128,
         claimed_amount: Option<U128>,
     ) {
@@ -401,13 +388,41 @@ impl Contract {
             grants: HashMap::new(),
         });
 
+        require!(
+            !account.grants.contains_key(&issue_at),
+            "A grant has alredy been issued on this date"
+        );
+
         let grant = Grant {
             total_amount,
             claimed_amount: claimed_amount.unwrap_or_else(|| U128::from(0)),
             order_amount: U128::from(0),
         };
 
-        account.grants.insert(issue_date, grant);
+        account.grants.insert(issue_at, grant);
+    }
+
+    pub(crate) fn issue_internal(&mut self, issue_at: u32, grants: Vec<(AccountId, U128)>) {
+        Self::require_unpaused();
+
+        let total_amount: u128 = grants.iter().map(|(_, amount)| amount.0).sum();
+        if total_amount > self.spare_balance.0 {
+            env::panic_str(&format!(
+                "Insufficient spare balance: required {}, available {}",
+                total_amount, self.spare_balance.0
+            ));
+        }
+
+        for (account_id, amount) in grants {
+            self.create_grant_internal(&account_id, issue_at, amount, None);
+        }
+
+        self.spare_balance = U128::from(self.spare_balance.0 - total_amount);
+
+        log_str(&format!(
+            "Issued grants with total amount {} at timestamp {}",
+            total_amount, issue_at
+        ));
     }
 }
 
@@ -597,11 +612,11 @@ mod tests {
         contract.on_authorize_complete(vec![
             TransferKey {
                 account_id: account_two.clone(),
-                issue_date: DEFAULT_CLIFF,
+                issue_at: DEFAULT_CLIFF,
             },
             TransferKey {
                 account_id: account_one.clone(),
-                issue_date: DEFAULT_CLIFF,
+                issue_at: DEFAULT_CLIFF,
             },
         ]);
 

@@ -1,9 +1,11 @@
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::{
-    env::panic_str, json_types::U128, near, require, serde_json, AccountId, PromiseOrValue,
+    env::{self, panic_str},
+    json_types::U128,
+    near, require, serde_json, AccountId, PromiseOrValue,
 };
 
-use crate::{grant::GrantApi, Contract, ContractExt, Role};
+use crate::{Contract, ContractExt, Role};
 use near_sdk_contract_tools::{pause::Pause, rbac::Rbac};
 
 #[near(serializers = [json])]
@@ -17,7 +19,7 @@ pub enum FtMessage {
 
 #[near(serializers = [json])]
 pub struct IssueData {
-    pub issue_date: u32,
+    pub issue_at: u32,
     pub grants: Vec<(AccountId, U128)>,
 }
 
@@ -29,6 +31,11 @@ impl FungibleTokenReceiver for Contract {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
+        require!(
+            env::predecessor_account_id() == self.token_id,
+            format!("Can only receive tokens from {}", self.token_id)
+        );
+
         let message: FtMessage =
             serde_json::from_str(&msg).unwrap_or_else(|_| panic_str("Failed to parse the message"));
 
@@ -44,16 +51,16 @@ impl FungibleTokenReceiver for Contract {
 
 impl Contract {
     fn on_top_up(&mut self, sender_id: &AccountId, amount: U128) {
-        Self::has_role(sender_id, &Role::Issuer);
+        require!(Self::has_role(sender_id, &Role::Issuer));
 
         self.spare_balance.0 += amount.0;
     }
 
     fn on_issue(&mut self, sender_id: &AccountId, amount: U128, issue_data: IssueData) {
-        Self::has_role(sender_id, &Role::Issuer);
+        require!(Self::has_role(sender_id, &Role::Issuer));
 
         self.spare_balance.0 += amount.0;
-        self.issue(issue_data.issue_date, issue_data.grants);
+        self.issue_internal(issue_data.issue_at, issue_data.grants);
     }
 
     fn on_migrate(
@@ -62,7 +69,7 @@ impl Contract {
         amount: U128,
         accounts: Vec<(AccountId, u32, U128, U128)>,
     ) {
-        Self::has_role(sender_id, &Role::Predecessor);
+        require!(Self::has_role(sender_id, &Role::Predecessor));
         Self::require_unpaused();
 
         let total_amount: u128 = accounts
@@ -74,8 +81,8 @@ impl Contract {
             "Transferred amount doesn't match total grants amount"
         );
 
-        for (account_id, issue_date, total_amount, claimed_amount) in accounts.into_iter() {
-            self.create_grant_internal(&account_id, issue_date, total_amount, Some(claimed_amount));
+        for (account_id, issue_at, total_amount, claimed_amount) in accounts.into_iter() {
+            self.create_grant_internal(&account_id, issue_at, total_amount, Some(claimed_amount));
         }
     }
 }
