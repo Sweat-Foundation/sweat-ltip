@@ -16,6 +16,7 @@ export function createTest(): TestFn<Context> {
     const root = worker.rootAccount;
 
     const alice = await root.createSubAccount('alice');
+    const bob = await root.createSubAccount('bob');
     const owner = await root.createSubAccount('owner');
     const issuer = await root.createSubAccount('issuer');
     const executor = await root.createSubAccount('executor');
@@ -27,7 +28,7 @@ export function createTest(): TestFn<Context> {
     await fundAccounts(sweat, owner, [issuer, alice]);
 
     t.context.worker = worker;
-    t.context.accounts = { root, contract, sweat, alice, owner, issuer, executor };
+    t.context.accounts = { root, contract, sweat, alice, bob, owner, issuer, executor };
   });
 
   test.after(async t => {

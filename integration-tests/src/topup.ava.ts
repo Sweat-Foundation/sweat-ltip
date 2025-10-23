@@ -22,7 +22,7 @@ test('Check top up', async t => {
   t.is(Number(aliceTopUpResult.parseResult()), 0);
   t.is(await contract.view('get_spare_balance'), '0');
 
-  console.log('  ➤ Call sweat.ft_transfer_call(top_up) by unauthorized account');
+  console.log('  ➤ Call sweat.ft_transfer_call(top_up) by authorized account');
   const issuerTopUpAmount = 5000000;
   const issuerTopUpResult: string = await issuer.call(
     sweat, 'ft_transfer_call',
