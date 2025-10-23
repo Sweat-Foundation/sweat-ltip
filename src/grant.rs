@@ -7,7 +7,7 @@ use crate::{
 use near_sdk::{
     env::{self, log_str},
     json_types::U128,
-    near, require, serde_json, AccountId, Promise, PromiseResult,
+    near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
 };
 use near_sdk_contract_tools::{pause::Pause, rbac::Rbac, standard::nep297::Event};
 
@@ -185,7 +185,7 @@ impl GrantApi for Contract {
                     "amount": amount.to_string()
                 }))
                 .unwrap(),
-                env::attached_deposit(),
+                NearToken::from_yoctonear(1),
                 GAS_PER_TRANSFER,
             );
         }
@@ -197,7 +197,7 @@ impl GrantApi for Contract {
                     "transfer_keys": transfer_keys
                 }))
                 .unwrap(),
-                env::attached_deposit(),
+                NearToken::from_yoctonear(0),
                 GAS_FOR_CALLBACK,
             ),
         );

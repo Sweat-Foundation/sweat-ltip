@@ -1,4 +1,4 @@
-import { TransactionResult } from "near-workspaces";
+import { NearAccount, TransactionResult } from "near-workspaces";
 
 export type Grant = {
   total_amount: string;
@@ -27,4 +27,10 @@ type Error = {
     index: number,
     kind: object
   }
+}
+
+export async function ft_balance(ft: NearAccount, account: NearAccount): Promise<bigint> {
+  const balance: string = await ft.view('ft_balance_of', { account_id: account.accountId });
+
+  return BigInt(balance);
 }

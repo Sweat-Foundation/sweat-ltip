@@ -6,7 +6,7 @@ export type Context = {
   accounts: Record<string, NearAccount>;
 }
 
-export function createTest(): TestFn<Context> {
+export function createTest(cliff_duration?: number | null, full_unlock_duration?: number | null): TestFn<Context> {
   const test = anyTest as TestFn<Context>;
 
   test.before(async t => {
@@ -22,7 +22,7 @@ export function createTest(): TestFn<Context> {
     const executor = await root.createSubAccount('executor');
 
     const ft = await prepareFtContract(root, owner);
-    const contract = await prepareLtipContract(root, ft, owner, issuer, executor);
+    const contract = await prepareLtipContract(root, ft, owner, issuer, executor, cliff_duration, full_unlock_duration);
 
     await storageDeposit(ft, [contract, alice, bob, issuer, executor]);
     await fundAccounts(ft, [issuer, alice]);
@@ -53,15 +53,23 @@ export async function prepareFtContract(root: NearAccount, owner: NearAccount): 
   return ft;
 }
 
-async function prepareLtipContract(root: NearAccount, ft: NearAccount, owner: NearAccount, issuer: NearAccount, executor: NearAccount): Promise<NearAccount> {
+async function prepareLtipContract(
+  root: NearAccount,
+  ft: NearAccount,
+  owner: NearAccount,
+  issuer: NearAccount,
+  executor: NearAccount,
+  cliff_duration?: number | null,
+  full_unlock_duration?: number | null
+): Promise<NearAccount> {
   console.log('🚢 Deploy LTIP contract');
   const contract = await root.devDeploy('../res/sweat_ltip.wasm');
 
   console.log('  ➤ Call contract.new');
   await contract.call(contract, 'new', {
     token_id: ft.accountId,
-    cliff_duration: 31536000,
-    full_unlock_duration: 94608000,
+    cliff_duration: cliff_duration ?? 31536000,
+    full_unlock_duration: full_unlock_duration ?? 94608000,
     owner_id: owner.accountId
   });
 
