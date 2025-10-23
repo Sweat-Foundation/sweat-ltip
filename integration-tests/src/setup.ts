@@ -40,7 +40,7 @@ export function createTest(): TestFn<Context> {
   return test;
 }
 
-async function prepareFtContract(root: NearAccount, owner: NearAccount): Promise<NearAccount> {
+export async function prepareFtContract(root: NearAccount, owner: NearAccount): Promise<NearAccount> {
   console.log('🚢 Deploy SWEAT contract');
   const ft = await root.devDeploy('../res/sweat.wasm');
 
@@ -74,7 +74,7 @@ async function prepareLtipContract(root: NearAccount, ft: NearAccount, owner: Ne
   return contract;
 }
 
-async function storageDeposit(ft: NearAccount, accounts: Array<NearAccount>): Promise<void> {
+export async function storageDeposit(ft: NearAccount, accounts: Array<NearAccount>): Promise<void> {
   console.log('💳 Storage deposit');
   for (var account of accounts) {
     console.log('  ➤ Register', account.accountId);
@@ -88,7 +88,7 @@ async function storageDeposit(ft: NearAccount, accounts: Array<NearAccount>): Pr
   }
 }
 
-async function fundAccounts(ft: NearAccount, accounts: Array<NearAccount>): Promise<void> {
+export async function fundAccounts(ft: NearAccount, accounts: Array<NearAccount>): Promise<void> {
   console.log('💸 Fund accounts');
   for (var account of accounts) {
     console.log('  ➤ Funding', account.accountId);

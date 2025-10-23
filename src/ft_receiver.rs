@@ -1,9 +1,11 @@
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::{
-    env::panic_str, json_types::U128, near, require, serde_json, AccountId, PromiseOrValue,
+    env::{self, panic_str},
+    json_types::U128,
+    near, require, serde_json, AccountId, PromiseOrValue,
 };
 
-use crate::{grant::GrantApi, Contract, ContractExt, Role};
+use crate::{Contract, ContractExt, Role};
 use near_sdk_contract_tools::{pause::Pause, rbac::Rbac};
 
 #[near(serializers = [json])]
@@ -29,6 +31,11 @@ impl FungibleTokenReceiver for Contract {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
+        require!(
+            env::predecessor_account_id() == self.token_id,
+            format!("Can only receive tokens from {}", self.token_id)
+        );
+
         let message: FtMessage =
             serde_json::from_str(&msg).unwrap_or_else(|_| panic_str("Failed to parse the message"));
 
