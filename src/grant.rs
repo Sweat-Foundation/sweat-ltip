@@ -344,7 +344,10 @@ impl GrantApi for Contract {
                         / unlock_period_duration as u128
                 };
 
-                grant.total_amount = unlocked_amount.max(grant.claimed_amount.0).into();
+                let updated_amount = unlocked_amount.max(grant.claimed_amount.0);
+
+                self.spare_balance.0 += grant.total_amount.0 - updated_amount;
+                grant.total_amount = updated_amount.into();
             }
         }
     }
