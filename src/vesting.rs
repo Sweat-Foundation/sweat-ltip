@@ -1,9 +1,6 @@
-use near_sdk::env::{self, panic_str};
+use near_sdk::env::panic_str;
 
-use crate::{Config, Grant};
-
-// let now = u32::try_from(env::block_timestamp_ms() / 1_000)
-//     .unwrap_or_else(|_| panic_str("Failed to convert timestamp."));
+use crate::Config;
 
 pub(crate) fn calculate_vested_amount(
     now: u32,
