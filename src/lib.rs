@@ -1,8 +1,11 @@
 pub mod auth;
+pub mod common;
+pub mod config;
 pub mod event;
 mod ft_receiver;
 pub mod grant;
 pub mod init;
+pub mod vesting;
 
 #[cfg(test)]
 pub mod testing_api;
@@ -51,7 +54,8 @@ pub struct Grant {
 }
 
 #[near(serializers = [borsh, json])]
+#[derive(Clone)]
 pub struct Config {
     pub cliff_duration: u32,
-    pub full_unlock_duration: u32,
+    pub vesting_duration: u32,
 }

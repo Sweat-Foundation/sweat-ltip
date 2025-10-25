@@ -1,13 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
+    common::now,
     event::{LtipEvent, OrderUpdateData},
+    vesting::calculate_vested_amount,
     Account, Contract, ContractExt, Grant, Role,
 };
 use near_sdk::{
-    env::{self, log_str},
+    env::{self, log_str, panic_str},
     json_types::U128,
-    near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
+    near, require,
+    serde::de::IntoDeserializer,
+    serde_json, AccountId, NearToken, Promise, PromiseResult,
 };
 use near_sdk_contract_tools::{pause::Pause, rbac::Rbac, standard::nep297::Event};
 
@@ -19,6 +23,25 @@ const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
 pub struct TransferKey {
     pub account_id: AccountId,
     pub issue_at: u32,
+}
+
+#[near(serializers = [json])]
+pub struct AccountView {
+    pub account_id: AccountId,
+    pub grants: Vec<GrantView>,
+}
+
+#[near(serializers = [json])]
+pub struct GrantView {
+    pub issued_at: u32,
+    pub cliff_end_at: u32,
+    pub vesting_end_at: u32,
+    pub total_amount: U128,
+    pub claimed_amount: U128,
+    pub order_amount: U128,
+    pub vested_amount: U128,
+    pub not_vested_amount: U128,
+    pub claimable_amount: U128,
 }
 
 /// GrantApi encapsulates vesting-related actions such as claiming, issuing, buybacks, and termination logic.
@@ -42,7 +65,7 @@ pub trait GrantApi {
     fn get_orders(&self) -> Vec<(AccountId, u32, U128)>;
 
     /// Retrieves a copy of the stored account, if present.
-    fn get_account(&self, account_id: &AccountId) -> Option<Account>;
+    fn get_account(&self, account_id: &AccountId) -> Option<AccountView>;
 
     /// Returns the contract's spare balance.
     fn get_spare_balance(&self) -> U128;
@@ -51,7 +74,7 @@ pub trait GrantApi {
     fn get_pending_transfers(&self) -> HashMap<AccountId, Vec<(u32, U128)>>;
 
     /// Terminates an account's grants at the provided timestamp, adjusting totals to reflect vested amounts.
-    fn terminate(&mut self, account_id: AccountId, timestamp: u64);
+    fn terminate(&mut self, account_id: AccountId, timestamp: u32);
 }
 
 #[near]
@@ -60,7 +83,7 @@ impl GrantApi for Contract {
         Self::require_unpaused();
 
         let caller = env::predecessor_account_id();
-        let current_timestamp = env::block_timestamp();
+        let now = now();
 
         let pending_issue_ats: HashSet<u32> = self
             .pending_transfers
@@ -83,27 +106,14 @@ impl GrantApi for Contract {
                 continue;
             }
 
-            let cliff_end = (*issue_at as u64) + (self.config.cliff_duration as u64);
-            let full_unlock = cliff_end + (self.config.full_unlock_duration as u64);
+            let vested_amount =
+                calculate_vested_amount(now, &self.config, *issue_at, grant.total_amount.0);
 
-            if current_timestamp < cliff_end {
+            if vested_amount == 0 {
                 continue;
             }
 
-            let total_unlocked_amount = if current_timestamp >= full_unlock {
-                grant.total_amount.0
-            } else {
-                let unlock_period_duration = full_unlock - cliff_end;
-                let elapsed_since_cliff = current_timestamp - cliff_end;
-
-                (grant.total_amount.0 * elapsed_since_cliff as u128)
-                    / unlock_period_duration as u128
-            };
-
-            let outstanding = grant.claimed_amount.0 + grant.order_amount.0;
-            if total_unlocked_amount > outstanding {
-                grant.order_amount.0 += total_unlocked_amount - outstanding;
-            }
+            grant.order_amount.0 = vested_amount - grant.claimed_amount.0;
 
             event_data.push(OrderUpdateData {
                 issue_at: issue_at.clone(),
@@ -309,8 +319,44 @@ impl GrantApi for Contract {
         orders
     }
 
-    fn get_account(&self, account_id: &AccountId) -> Option<Account> {
-        self.accounts.get(account_id).cloned()
+    fn get_account(&self, account_id: &AccountId) -> Option<AccountView> {
+        if let Some(account) = self.accounts.get(account_id) {
+            let now = now();
+
+            let grants = account
+                .grants
+                .iter()
+                .map(|(issue_at, grant)| {
+                    let cliff_end_at = *issue_at + self.config.cliff_duration;
+                    let vesting_end_at = cliff_end_at + self.config.vesting_duration;
+
+                    let vested_amount =
+                        calculate_vested_amount(now, &self.config, *issue_at, grant.total_amount.0);
+
+                    dbg!(vested_amount);
+                    dbg!(grant.claimed_amount.0);
+
+                    GrantView {
+                        issued_at: *issue_at,
+                        cliff_end_at,
+                        vesting_end_at,
+                        total_amount: grant.total_amount,
+                        claimed_amount: grant.claimed_amount,
+                        order_amount: grant.order_amount,
+                        vested_amount: vested_amount.into(),
+                        not_vested_amount: (grant.total_amount.0 - vested_amount).into(),
+                        claimable_amount: (vested_amount - grant.claimed_amount.0).into(),
+                    }
+                })
+                .collect();
+
+            return Some(AccountView {
+                account_id: account_id.clone(),
+                grants,
+            });
+        }
+
+        None
     }
 
     fn get_spare_balance(&self) -> U128 {
@@ -321,7 +367,7 @@ impl GrantApi for Contract {
         self.pending_transfers.clone()
     }
 
-    fn terminate(&mut self, account_id: AccountId, timestamp: u64) {
+    fn terminate(&mut self, account_id: AccountId, timestamp: u32) {
         Self::require_role(&Role::Executor);
         Self::require_unpaused();
 
@@ -329,25 +375,20 @@ impl GrantApi for Contract {
 
         if let Some(account) = self.accounts.get_mut(&account_id) {
             for (issue_at, grant) in account.grants.iter_mut() {
-                let cliff_end = (*issue_at as u64) + (self.config.cliff_duration as u64);
-                let full_unlock = cliff_end + (self.config.full_unlock_duration as u64);
-
-                let unlocked_amount = if timestamp < cliff_end {
-                    0
-                } else if timestamp >= full_unlock {
-                    grant.total_amount.0
-                } else {
-                    let unlock_period_duration = full_unlock - cliff_end;
-                    let elapsed_since_cliff = timestamp - cliff_end;
-
-                    (grant.total_amount.0 * elapsed_since_cliff as u128)
-                        / unlock_period_duration as u128
-                };
-
-                let updated_amount = unlocked_amount.max(grant.claimed_amount.0);
+                let vested_amount = calculate_vested_amount(
+                    timestamp,
+                    &self.config,
+                    *issue_at,
+                    grant.total_amount.0,
+                );
+                let updated_amount = vested_amount.max(grant.claimed_amount.0);
 
                 self.spare_balance.0 += grant.total_amount.0 - updated_amount;
                 grant.total_amount = updated_amount.into();
+                grant.order_amount.0 = grant
+                    .order_amount
+                    .0
+                    .min(grant.total_amount.0 - grant.claimed_amount.0);
             }
         }
     }
@@ -443,10 +484,12 @@ mod tests {
     use crate::{
         auth::{AuthApi, Role},
         grant::{GrantApi, TransferKey},
+        init::InitApi,
         testing_api::{
             get_context, init_contract_with_grant, init_contract_with_spare, set_predecessor,
-            DEFAULT_CLIFF,
+            set_predecessor_with_time, DEFAULT_CLIFF,
         },
+        Contract,
     };
 
     #[test]
@@ -701,5 +744,36 @@ mod tests {
             .get(&1_000)
             .unwrap();
         assert_eq!(grant.total_amount.0, 10_000);
+    }
+
+    #[test]
+    fn claim_during_vesting() {
+        let admin = &accounts(0);
+        let alice = &accounts(1);
+
+        let mut contract = Contract::new(
+            admin.clone(),
+            365 * 24 * 60 * 60,
+            3 * 365 * 24 * 60 * 60,
+            admin.clone(),
+        );
+
+        let issue_at = 1717200000;
+        contract.create_grant_internal(
+            alice,
+            issue_at,
+            4_000_000_000_000_000_000_000_000_000.into(),
+            Some(481_065_026_213_428_039_912_058.into()),
+        );
+
+        // elapsed 12 671 300 seconds
+        set_predecessor_with_time(alice, 1761407300000000000);
+
+        contract.claim();
+        let account = contract.get_account(alice).unwrap();
+        assert_eq!(
+            535_257_984_525_621_511_917_601_542,
+            account.grants.first().unwrap().order_amount.0
+        );
     }
 }

@@ -1,9 +1,30 @@
-import { NearAccount, Worker } from 'near-workspaces';
+import { captureError, NearAccount, Worker } from 'near-workspaces';
 import anyTest, { TestFn } from 'ava'
 
 export type Context = {
   worker: Worker;
   accounts: Record<string, NearAccount>;
+}
+
+export function createProdMirrotTest(): TestFn<Context> {
+  const test = anyTest as TestFn<Context>;
+
+  test.before(async t => {
+    const worker = await Worker.init();
+    const root = worker.rootAccount;
+
+    const contract = await root.importContract({
+      mainnetContract: 'ltip.sweat',
+      withData: true,
+      blockId: 169_690_297,
+    });
+    await contract.deploy('../res/sweat_ltip.wasm');
+
+    t.context.worker = worker;
+    t.context.accounts = { root, contract };
+  });
+
+  return test;
 }
 
 export function createTest(cliff_duration?: number | null, full_unlock_duration?: number | null): TestFn<Context> {

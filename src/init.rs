@@ -8,7 +8,7 @@ pub trait InitApi {
     fn new(
         token_id: AccountId,
         cliff_duration: u32,
-        full_unlock_duration: u32,
+        vestin_duration: u32,
         owner_id: AccountId,
     ) -> Contract;
 }
@@ -20,7 +20,7 @@ impl InitApi for Contract {
     fn new(
         token_id: AccountId,
         cliff_duration: u32,
-        full_unlock_duration: u32,
+        vesting_duration: u32,
         owner_id: AccountId,
     ) -> Contract {
         let mut contract = Contract {
@@ -28,7 +28,7 @@ impl InitApi for Contract {
             accounts: IterableMap::new(StorageKey::Accounts),
             config: Config {
                 cliff_duration,
-                full_unlock_duration,
+                vesting_duration,
             },
             spare_balance: 0.into(),
             pending_transfers: Default::default(),
