@@ -1,5 +1,6 @@
 use near_sdk::{near, AccountId, BorshStorageKey};
 use near_sdk_contract_tools::owner::Owner;
+use near_sdk_contract_tools::pause::Pause;
 use near_sdk_contract_tools::rbac::Rbac;
 
 use crate::{Contract, ContractExt};
@@ -23,6 +24,7 @@ pub trait AuthApi {
     fn has_role(&self, account_id: &AccountId, role: Role) -> bool;
     /// Returns list of accounts for the provided `Role`.
     fn members(&self, role: Role) -> Vec<AccountId>;
+    fn force_unpause(&mut self);
 }
 
 #[near]
@@ -45,6 +47,12 @@ impl AuthApi for Contract {
 
     fn members(&self, role: Role) -> Vec<AccountId> {
         Self::iter_members_of(&role).collect()
+    }
+
+    fn force_unpause(&mut self) {
+        Self::require_owner();
+
+        self.unpause();
     }
 }
 
