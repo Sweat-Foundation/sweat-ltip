@@ -2,7 +2,7 @@ import { createProdMirrotTest } from "./setup.ts";
 
 const test = createProdMirrotTest();
 
-test('Check config', async t => {
+test('🧪 Check config', async t => {
   const { contract } = t.context.accounts;
 
   const config = await contract.view('get_config');

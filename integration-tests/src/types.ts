@@ -1,13 +1,20 @@
 import { NearAccount, TransactionResult } from "near-workspaces";
 
 export type Grant = {
+  issued_at: number;
+  cliff_end_at: number;
+  vesting_end_at: number;
   total_amount: string;
   claimed_amount: string;
   order_amount: string;
+  vested_amount: string;
+  not_vested_amount: string;
+  claimable_amount: string;
 };
 
 export type Account = {
-  grants: Record<number, Grant>;
+  account_id: string,
+  grants: Grant[],
 };
 
 export function sweat(n: number): bigint {

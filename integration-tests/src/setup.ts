@@ -1,7 +1,9 @@
-import { captureError, NearAccount, StateItem, Worker } from 'near-workspaces';
+import { NearAccount, StateItem, Worker } from 'near-workspaces';
 import anyTest, { TestFn } from 'ava'
 import { readFile, writeFile } from "fs/promises";
-import { Account, Contract, Data, RecordBuilder, Records } from 'near-workspaces/dist/record';
+import { Data } from 'near-workspaces/dist/record';
+import { LoggingOptions, NearAccountLike, withLogging } from './util/logger_proxy.ts';
+import { ansi, runWithProgress, setProgress } from './util/progress_logger.ts';
 
 export type Context = {
   worker: Worker;
@@ -26,6 +28,14 @@ export function createProdMirrotTest(): TestFn<Context> {
     t.context.accounts = { root, contract };
   });
 
+  test.after.always(async t => {
+    if (t.context.worker) {
+      await t.context.worker.tearDown().catch(error => {
+        console.log('Failed to tear down the worker:', error);
+      });
+    }
+  });
+
   return test;
 }
 
@@ -41,24 +51,28 @@ export async function loadContext(): Promise<Context> {
   const root = worker.rootAccount;
 
   console.log('Create Actor accounts');
-  const alice = await root.createSubAccount('alice');
+  const alice: NearAccount = withLogging(await root.createSubAccount('alice'));
   const bob = await root.createSubAccount('bob');
   const owner = await root.createSubAccount('owner');
   const issuer = await root.createSubAccount('issuer');
   const executor = await root.createSubAccount('executor');
 
   console.log('Create Contract accounts');
-  const ft = await root.createSubAccount('token');
-  const contract = await root.createSubAccount('ltip');
+  const ft: NearAccount = await root.createSubAccount('token');
+  const contract: NearAccount = await root.createSubAccount('ltip');
 
   const state: StateDump = JSON.parse(await readFile('state', 'utf-8'));
 
   await patchContract(ft, '../res/sweat.wasm', state.ft);
   await patchContract(contract, '../res/sweat_ltip.wasm', state.ltip);
 
+  const accounts = { root, contract, ft, alice, bob, owner, issuer, executor } as const;
+
+  const accountsLogged = wrapAccounts(accounts);
+
   return {
     worker,
-    accounts: { root, contract, ft, alice, bob, owner, issuer, executor }
+    accounts: accountsLogged
   }
 }
 
@@ -99,7 +113,7 @@ export function createTest(cliff_duration?: number | null, full_unlock_duration?
     }
   });
 
-  test.after(async t => {
+  test.after.always(async t => {
     await t.context.worker.tearDown().catch(error => {
       console.log('Failed to tear down the worker:', error);
     });
@@ -180,22 +194,49 @@ export async function fundAccounts(ft: NearAccount, accounts: Array<NearAccount>
 }
 
 async function patchContract(account: NearAccount, binaryPath: string, state: StateItem[]) {
-  console.log('Deploy binary');
-  await account.deploy(binaryPath);
+  await runWithProgress(async () => {
+    setProgress(`deploy ${ansi.gray('→ load state → patch state')}`);
+    await account.deploy(binaryPath);
 
-  console.log('Load state');
-  const dataRecords: Array<Data> = state.map(item => {
-    return {
-      Data: {
-        account_id: account.accountId,
-        data_key: item.key,
-        value: item.value,
-      }
-    };
-  })
+    setProgress(`deploy → load state ${ansi.gray('→ patch state')}`);
+    const dataRecords: Array<Data> = state.map(item => {
+      return {
+        Data: {
+          account_id: account.accountId,
+          data_key: item.key,
+          value: item.value,
+        }
+      };
+    })
 
-  console.log('Patch ', account.accountId);
-  await account.patchStateRecords({
-    records: dataRecords
+    setProgress(`deploy → load state → patch state`);
+    await account.patchStateRecords({
+      records: dataRecords
+    });
+
+    setProgress(`deploy → load state → patch state ${ansi.green('✔')}`);
+  }, {
+    mode: 'spinner',
+    prefix: `${ansi.bold(`Setup contract ${account.accountId}: `)}`,
   });
+}
+
+function isNearAccountLike(x: unknown): x is NearAccountLike {
+  return !!x && typeof (x as any).accountId === 'string';
+}
+
+/**
+ * Wrap every value in `accounts` with withNearLogging while preserving the keys and types.
+ */
+export function wrapAccounts<T extends Record<string, NearAccountLike>>(
+  accounts: T,
+  opts?: LoggingOptions
+): T {
+  const wrapped = Object.fromEntries(
+    Object.entries(accounts).map(([k, v]) => [
+      k,
+      isNearAccountLike(v) ? withLogging(v, opts) : v,
+    ])
+  ) as T;
+  return wrapped;
 }
