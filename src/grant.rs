@@ -416,6 +416,8 @@ impl Contract {
                 ));
             }
         }
+
+        self.unpause();
     }
 
     pub(crate) fn create_grant_internal(
