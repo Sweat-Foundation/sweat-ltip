@@ -2,12 +2,12 @@
   "schema_version": "0.4.0",
   "metadata": {
     "name": "sweat-ltip",
-    "version": "0.1.1",
+    "version": "0.1.3",
     "build": {
       "compiler": "rustc 1.86.0",
       "builder": "cargo-near cargo-near-build 0.9.0"
     },
-    "wasm_hash": "HVap5LZ4h6WzN4U8KjZnPwsKseGvR4mrUXS7hddvczeg"
+    "wasm_hash": "Fd3odw7JTRmGd5BRoahbHa6SeXgsyzkscnqv5XBczHz2"
   },
   "body": {
     "functions": [
@@ -75,6 +75,10 @@
       {
         "name": "contract_source_metadata",
         "kind": "view"
+      },
+      {
+        "name": "force_unpause",
+        "kind": "call"
       },
       {
         "name": "ft_on_transfer",
@@ -620,6 +624,14 @@
             },
             "order_amount": {
               "type": "string"
+            },
+            "terminated_at": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
             },
             "total_amount": {
               "type": "string"

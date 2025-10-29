@@ -5,6 +5,8 @@ pub mod event;
 mod ft_receiver;
 pub mod grant;
 pub mod init;
+#[cfg(test)]
+pub mod tests;
 pub mod vesting;
 
 #[cfg(test)]
@@ -51,6 +53,7 @@ pub struct Grant {
     pub total_amount: U128,
     pub claimed_amount: U128,
     pub order_amount: U128,
+    pub terminated_at: Option<u32>,
 }
 
 #[near(serializers = [borsh, json])]

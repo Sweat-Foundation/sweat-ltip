@@ -1,17 +1,18 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    cmp,
+    collections::{HashMap, HashSet},
+};
 
 use crate::{
     common::now,
     event::{LtipEvent, OrderUpdateData},
     vesting::calculate_vested_amount,
-    Account, Contract, ContractExt, Grant, Role,
+    Account, Config, Contract, ContractExt, Grant, Role,
 };
 use near_sdk::{
     env::{self, log_str, panic_str},
     json_types::U128,
-    near, require,
-    serde::de::IntoDeserializer,
-    serde_json, AccountId, NearToken, Promise, PromiseResult,
+    near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
 };
 use near_sdk_contract_tools::{pause::Pause, rbac::Rbac, standard::nep297::Event};
 
@@ -42,6 +43,7 @@ pub struct GrantView {
     pub vested_amount: U128,
     pub not_vested_amount: U128,
     pub claimable_amount: U128,
+    pub terminated_at: Option<u32>,
 }
 
 /// GrantApi encapsulates vesting-related actions such as claiming, issuing, buybacks, and termination logic.
@@ -83,7 +85,6 @@ impl GrantApi for Contract {
         Self::require_unpaused();
 
         let caller = env::predecessor_account_id();
-        let now = now();
 
         let pending_issue_ats: HashSet<u32> = self
             .pending_transfers
@@ -106,8 +107,7 @@ impl GrantApi for Contract {
                 continue;
             }
 
-            let vested_amount =
-                calculate_vested_amount(now, &self.config, *issue_at, grant.total_amount.0);
+            let vested_amount = grant.get_vested_amount(*issue_at, &self.config);
 
             if vested_amount == 0 {
                 continue;
@@ -321,8 +321,6 @@ impl GrantApi for Contract {
 
     fn get_account(&self, account_id: &AccountId) -> Option<AccountView> {
         if let Some(account) = self.accounts.get(account_id) {
-            let now = now();
-
             let grants = account
                 .grants
                 .iter()
@@ -330,11 +328,7 @@ impl GrantApi for Contract {
                     let cliff_end_at = *issue_at + self.config.cliff_duration;
                     let vesting_end_at = cliff_end_at + self.config.vesting_duration;
 
-                    let vested_amount =
-                        calculate_vested_amount(now, &self.config, *issue_at, grant.total_amount.0);
-
-                    dbg!(vested_amount);
-                    dbg!(grant.claimed_amount.0);
+                    let vested_amount = grant.get_vested_amount(*issue_at, &self.config);
 
                     GrantView {
                         issued_at: *issue_at,
@@ -346,6 +340,7 @@ impl GrantApi for Contract {
                         vested_amount: vested_amount.into(),
                         not_vested_amount: (grant.total_amount.0 - vested_amount).into(),
                         claimable_amount: (vested_amount - grant.claimed_amount.0).into(),
+                        terminated_at: grant.terminated_at,
                     }
                 })
                 .collect();
@@ -371,24 +366,11 @@ impl GrantApi for Contract {
         Self::require_role(&Role::Executor);
         Self::require_unpaused();
 
-        self.decline_orders(vec![account_id.clone()]);
-
         if let Some(account) = self.accounts.get_mut(&account_id) {
             for (issue_at, grant) in account.grants.iter_mut() {
-                let vested_amount = calculate_vested_amount(
-                    timestamp,
-                    &self.config,
-                    *issue_at,
-                    grant.total_amount.0,
-                );
-                let updated_amount = vested_amount.max(grant.claimed_amount.0);
+                let unvested_amount = grant.terminate(*issue_at, &self.config, timestamp);
 
-                self.spare_balance.0 += grant.total_amount.0 - updated_amount;
-                grant.total_amount = updated_amount.into();
-                grant.order_amount.0 = grant
-                    .order_amount
-                    .0
-                    .min(grant.total_amount.0 - grant.claimed_amount.0);
+                self.spare_balance.0 += unvested_amount;
             }
         }
     }
@@ -440,6 +422,7 @@ impl Contract {
             total_amount,
             claimed_amount: claimed_amount.unwrap_or_else(|| U128::from(0)),
             order_amount: U128::from(0),
+            terminated_at: None,
         };
 
         account.grants.insert(issue_at, grant);
@@ -476,75 +459,162 @@ impl Contract {
     }
 }
 
+impl Grant {
+    pub(crate) fn get_vested_amount(&self, issue_at: u32, config: &Config) -> u128 {
+        let now = now();
+
+        let cliff_end = issue_at + config.cliff_duration;
+        let effective_vesting_duration = self
+            .terminated_at
+            .map_or(config.vesting_duration, |t| t.saturating_sub(cliff_end));
+
+        calculate_vested_amount(
+            now,
+            cliff_end,
+            cliff_end + effective_vesting_duration,
+            self.total_amount.0,
+        )
+    }
+
+    pub(crate) fn terminate(&mut self, issue_at: u32, config: &Config, terminate_at: u32) -> u128 {
+        if self.terminated_at.is_some() {
+            return 0;
+        }
+
+        let cliff_end = config.cliff_end(issue_at);
+        let vesting_end = config.vesting_end(issue_at);
+
+        if terminate_at > vesting_end {
+            return 0;
+        }
+
+        let now = now();
+        let vested_amount =
+            calculate_vested_amount(now, cliff_end, vesting_end, self.total_amount.0);
+
+        if vested_amount >= self.claimed_amount.0 {
+            self.terminated_at = terminate_at.into();
+            self.order_amount.0 =
+                cmp::min(self.order_amount.0, vested_amount - self.claimed_amount.0);
+
+            let unvested_amount = self.total_amount.0 - vested_amount;
+            self.total_amount.0 = vested_amount;
+
+            return unvested_amount;
+        }
+
+        let effective_vesting_duration =
+            u32::try_from(self.claimed_amount.0 / self.performance(config.vesting_duration))
+                .unwrap_or_else(|_| panic_str("Failed to evaluate effective vesting duration"));
+
+        self.terminated_at = (issue_at + config.cliff_duration + effective_vesting_duration).into();
+        self.order_amount.0 = 0;
+
+        let unvested_amount = self.total_amount.0 - self.claimed_amount.0;
+        self.total_amount = self.claimed_amount;
+
+        return unvested_amount;
+    }
+
+    /// Amount of tokens being vested per second
+    fn performance(&self, vesting_duration: u32) -> u128 {
+        self.total_amount.0 / u128::from(vesting_duration)
+    }
+}
+
+impl Config {
+    fn cliff_end(&self, issue_at: u32) -> u32 {
+        issue_at + self.cliff_duration
+    }
+
+    fn vesting_end(&self, issue_at: u32) -> u32 {
+        self.cliff_end(issue_at) + self.vesting_duration
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
 
-    use near_sdk::{json_types::U128, test_utils::accounts, PromiseResult};
+    use near_sdk::{json_types::U128, test_utils::accounts, AccountId, PromiseResult};
     use near_sdk_contract_tools::pause::Pause;
+    use rstest::*;
 
     use crate::{
-        auth::{AuthApi, Role},
         grant::{GrantApi, TransferKey},
-        init::InitApi,
-        testing_api::{
-            get_context, init_contract_with_grant, init_contract_with_spare, set_predecessor,
-            set_predecessor_with_time, DEFAULT_CLIFF,
-        },
+        testing_api::DEFAULT_CLIFF,
+        tests::context::TestContext,
+        tests::fixtures::*,
         Contract,
     };
 
-    #[test]
-    fn claim_during_cliff_does_nothing() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        set_predecessor(&accounts(1), 1_500);
+    #[rstest]
+    fn claim_during_cliff_does_nothing(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, 1_000, 10_000.into(), None);
+
+        context.switch_account(&alice);
+        context.set_block_timestamp_in_seconds(1_500);
 
         contract.claim();
 
-        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
         assert_eq!(grant.order_amount.0, 0);
     }
 
-    #[test]
-    fn claim_after_unlock_accumulates() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        set_predecessor(&accounts(1), 4_000);
+    #[rstest]
+    fn claim_after_unlock_accumulates(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, 1_000, 10_000.into(), None);
+
+        context.switch_account(&alice);
+        context.set_block_timestamp_in_seconds(4_000);
 
         contract.claim();
 
-        let account = contract.accounts.get(&accounts(1)).unwrap();
+        let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
         assert_eq!(grant.order_amount.0, 10_000);
     }
 
-    #[test]
-    fn buy_updates_claimed_and_spare_balance() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        let user = accounts(1);
+    #[rstest]
+    fn buy_updates_claimed_and_spare_balance(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, 1_000, 10_000.into(), None);
+
         let initial_spare = contract.spare_balance.0;
 
         {
-            let account = contract.accounts.get_mut(&user).unwrap();
+            let account = contract.accounts.get_mut(&alice).unwrap();
             let grant = account.grants.get_mut(&1_000).unwrap();
             grant.order_amount = U128::from(5_000);
         }
 
-        set_predecessor(&accounts(0), 0);
-        contract.buy(vec![user.clone()], 5_000);
+        context.switch_to_executor();
+        contract.buy(vec![alice.clone()], 5_000);
 
-        let account = contract.accounts.get(&user).unwrap();
+        let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
         assert_eq!(grant.claimed_amount.0, 2_500);
         assert_eq!(grant.order_amount.0, 0);
         assert_eq!(contract.spare_balance.0, initial_spare + 2_500);
     }
 
-    #[test]
-    fn issue_reduces_spare_balance() {
-        let mut contract = init_contract_with_spare(10_000);
-        set_predecessor(&accounts(0), 0);
+    #[rstest]
+    fn issue_reduces_spare_balance(mut context: TestContext, mut contract: Contract) {
+        contract.spare_balance = 10_000.into();
 
+        context.switch_to_issuer();
         contract.issue(
             1_000,
             vec![
@@ -557,68 +627,79 @@ mod tests {
         assert!(contract.accounts.get(&accounts(1)).is_some());
     }
 
-    #[test]
-    fn issue_requires_issuer_role() {
-        let mut contract = init_contract_with_spare(10_000);
+    #[rstest]
+    fn issue_requires_issuer_role(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        contract.spare_balance = 10_000.into();
 
-        set_predecessor(&accounts(1), 0);
+        context.switch_account(&alice);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.issue(1_000, vec![(accounts(2), U128::from(1_000))]);
+            contract.issue(1_000, vec![(bob.clone(), 1_000.into())]);
         }));
 
         assert!(result.is_err());
-        assert!(contract.accounts.get(&accounts(2)).is_none());
+        assert!(contract.accounts.get(&bob).is_none());
         assert_eq!(contract.spare_balance.0, 10_000);
     }
 
-    #[test]
-    fn authorize_moves_order_into_pending_transfers() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        let user = accounts(1);
+    #[rstest]
+    fn authorize_moves_order_into_pending_transfers(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, 1_000, 10_000.into(), None);
 
         {
-            let account = contract.accounts.get_mut(&user).unwrap();
+            let account = contract.accounts.get_mut(&alice).unwrap();
             let grant = account.grants.get_mut(&1_000).unwrap();
             grant.order_amount = U128::from(4_000);
         }
 
-        set_predecessor(&accounts(0), 0);
-        contract.grant_role(&accounts(0), Role::Executor);
-
-        contract.authorize(vec![user.clone()], Some(5_000));
+        context.switch_to_executor();
+        contract.authorize(vec![alice.clone()], Some(5_000));
 
         let pending = contract.get_pending_transfers();
-        assert!(pending.contains_key(&user));
-        let transfers = pending.get(&user).unwrap();
+        assert!(pending.contains_key(&alice));
+        let transfers = pending.get(&alice).unwrap();
         assert_eq!(transfers[0].1 .0, 2_000);
     }
 
-    #[test]
-    fn authorize_requires_executor_role() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
+    #[rstest]
+    fn authorize_requires_executor_role(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, 1_000, 10_000.into(), None);
 
-        set_predecessor(&accounts(1), 0);
+        context.switch_account(&alice);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.authorize(vec![accounts(1)], Some(10_000));
+            contract.authorize(vec![alice.clone()], Some(10_000));
         }));
 
         assert!(result.is_err());
         assert!(contract.get_pending_transfers().is_empty());
     }
 
-    #[test]
-    fn on_authorize_complete_reverts_failed_transfers_using_keys() {
-        let mut contract = init_contract_with_spare(0);
-        let account_one = accounts(1);
-        let account_two = accounts(2);
-
-        contract.create_grant_internal(&account_one, DEFAULT_CLIFF, U128::from(1_000), None);
-        contract.create_grant_internal(&account_two, DEFAULT_CLIFF, U128::from(1_000), None);
+    #[rstest]
+    fn on_authorize_complete_reverts_failed_transfers_using_keys(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, DEFAULT_CLIFF, U128::from(1_000), None);
+        contract.create_grant_internal(&bob, DEFAULT_CLIFF, U128::from(1_000), None);
 
         {
             let grant = contract
                 .accounts
-                .get_mut(&account_one)
+                .get_mut(&alice)
                 .unwrap()
                 .grants
                 .get_mut(&DEFAULT_CLIFF)
@@ -629,7 +710,7 @@ mod tests {
         {
             let grant = contract
                 .accounts
-                .get_mut(&account_two)
+                .get_mut(&bob)
                 .unwrap()
                 .grants
                 .get_mut(&DEFAULT_CLIFF)
@@ -639,86 +720,88 @@ mod tests {
 
         contract
             .pending_transfers
-            .insert(account_one.clone(), vec![(DEFAULT_CLIFF, U128::from(100))]);
+            .insert(alice.clone(), vec![(DEFAULT_CLIFF, U128::from(100))]);
         contract
             .pending_transfers
-            .insert(account_two.clone(), vec![(DEFAULT_CLIFF, U128::from(200))]);
+            .insert(bob.clone(), vec![(DEFAULT_CLIFF, U128::from(200))]);
 
-        let context = get_context(accounts(0)).build();
-        near_sdk::testing_env!(
-            context,
-            near_sdk::test_vm_config(),
-            near_sdk::RuntimeFeesConfig::test(),
-            Default::default(),
-            vec![PromiseResult::Successful(vec![]), PromiseResult::Failed]
-        );
+        context.set_promise_results(vec![
+            PromiseResult::Successful(vec![]),
+            PromiseResult::Failed,
+        ]);
 
         contract.pause();
         contract.on_authorize_complete(vec![
             TransferKey {
-                account_id: account_two.clone(),
+                account_id: alice.clone(),
                 issue_at: DEFAULT_CLIFF,
             },
             TransferKey {
-                account_id: account_one.clone(),
+                account_id: bob.clone(),
                 issue_at: DEFAULT_CLIFF,
             },
         ]);
 
-        let account_one_state = contract.accounts.get(&account_one).unwrap();
+        let account_one_state = contract.accounts.get(&alice).unwrap();
         let grant_one = account_one_state.grants.get(&DEFAULT_CLIFF).unwrap();
-        assert_eq!(grant_one.claimed_amount.0, 0);
-        assert_eq!(grant_one.order_amount.0, 100);
+        assert_eq!(grant_one.claimed_amount.0, 100);
+        assert_eq!(grant_one.order_amount.0, 0);
 
-        let account_two_state = contract.accounts.get(&account_two).unwrap();
+        let account_two_state = contract.accounts.get(&bob).unwrap();
         let grant_two = account_two_state.grants.get(&DEFAULT_CLIFF).unwrap();
-        assert_eq!(grant_two.claimed_amount.0, 200);
-        assert_eq!(grant_two.order_amount.0, 0);
+        assert_eq!(grant_two.claimed_amount.0, 0);
+        assert_eq!(grant_two.order_amount.0, 200);
 
         assert!(contract.pending_transfers.is_empty());
     }
 
-    #[test]
-    fn terminate_respects_cliff() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        let user = accounts(1);
+    #[rstest]
+    fn terminate_respects_cliff(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, DEFAULT_CLIFF, U128::from(10_000), None);
 
         {
-            let account = contract.accounts.get_mut(&user).unwrap();
+            let account = contract.accounts.get_mut(&alice).unwrap();
             let grant = account.grants.get_mut(&1_000).unwrap();
             grant.claimed_amount = U128::from(2_000);
             grant.order_amount = U128::from(3_000);
         }
 
-        set_predecessor(&accounts(0), 0);
-        contract.terminate(user.clone(), 1_500);
+        context.switch_to_executor();
+        contract.terminate(alice.clone(), 1_500);
 
-        let account = contract.accounts.get(&user).unwrap();
+        let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
         assert_eq!(grant.order_amount.0, 0);
         assert_eq!(grant.total_amount.0, 2_000);
     }
 
-    #[test]
-    fn buy_requires_executor_role() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        let user = accounts(1);
+    #[rstest]
+    fn buy_requires_executor_role(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, DEFAULT_CLIFF, U128::from(10_000), None);
 
         {
-            let account = contract.accounts.get_mut(&user).unwrap();
+            let account = contract.accounts.get_mut(&alice).unwrap();
             let grant = account.grants.get_mut(&1_000).unwrap();
             grant.order_amount = U128::from(4_000);
         }
 
-        set_predecessor(&accounts(2), 0);
+        context.switch_account(&alice);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.buy(vec![user.clone()], 5_000);
+            contract.buy(vec![alice.clone()], 5_000);
         }));
 
         assert!(result.is_err());
         let grant = contract
             .accounts
-            .get(&user)
+            .get(&alice)
             .unwrap()
             .grants
             .get(&1_000)
@@ -727,20 +810,24 @@ mod tests {
         assert_eq!(grant.claimed_amount.0, 0);
     }
 
-    #[test]
-    fn terminate_requires_executor_role() {
-        let mut contract = init_contract_with_grant(U128::from(10_000));
-        let user = accounts(1);
+    #[rstest]
+    fn terminate_requires_executor_role(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, DEFAULT_CLIFF, U128::from(10_000), None);
 
-        set_predecessor(&accounts(2), 0);
+        context.switch_account(&bob);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.terminate(user.clone(), 1_500);
+            contract.terminate(alice.clone(), 1_500);
         }));
 
         assert!(result.is_err());
         let grant = contract
             .accounts
-            .get(&user)
+            .get(&alice)
             .unwrap()
             .grants
             .get(&1_000)
@@ -748,31 +835,26 @@ mod tests {
         assert_eq!(grant.total_amount.0, 10_000);
     }
 
-    #[test]
-    fn claim_during_vesting() {
-        let admin = &accounts(0);
-        let alice = &accounts(1);
-
-        let mut contract = Contract::new(
-            admin.clone(),
-            365 * 24 * 60 * 60,
-            3 * 365 * 24 * 60 * 60,
-            admin.clone(),
-        );
-
+    #[rstest]
+    fn claim_during_vesting(
+        mut context: TestContext,
+        #[with(365 * 24 * 60 * 60, 3 * 365 * 24 * 60 * 60)] mut contract: Contract,
+        alice: AccountId,
+    ) {
         let issue_at = 1717200000;
         contract.create_grant_internal(
-            alice,
+            &alice,
             issue_at,
             4_000_000_000_000_000_000_000_000_000.into(),
             Some(481_065_026_213_428_039_912_058.into()),
         );
 
         // elapsed 12 671 300 seconds
-        set_predecessor_with_time(alice, 1761407300000000000);
+        context.set_block_timestamp_in_seconds(1761407300);
+        context.switch_account(&alice);
 
         contract.claim();
-        let account = contract.get_account(alice).unwrap();
+        let account = contract.get_account(&alice).unwrap();
         assert_eq!(
             535_257_984_525_621_511_917_601_542,
             account.grants.first().unwrap().order_amount.0

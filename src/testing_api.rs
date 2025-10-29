@@ -21,9 +21,9 @@ pub fn get_context(predecessor_account_id: AccountId) -> VMContextBuilder {
     builder
 }
 
-pub fn set_predecessor(account: &AccountId, timestamp: u64) {
+pub fn set_predecessor(account: &AccountId, timestamp_in_seconds: u64) {
     let mut context = get_context(account.clone());
-    context.block_timestamp(timestamp);
+    context.block_timestamp(timestamp_in_seconds * 1_000_000);
     testing_env!(context.build());
 }
 

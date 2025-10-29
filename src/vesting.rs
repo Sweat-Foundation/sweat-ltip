@@ -1,24 +1,20 @@
 use near_sdk::env::panic_str;
 
-use crate::Config;
-
 pub(crate) fn calculate_vested_amount(
     now: u32,
-    config: &Config,
-    issue_at: u32,
+    cliff_end: u32,
+    vesting_end: u32,
     amount: u128,
 ) -> u128 {
-    let cliff_end = issue_at + config.cliff_duration;
     if now < cliff_end {
         return 0;
     }
 
-    let vesting_end = cliff_end + config.vesting_duration;
-    if now >= vesting_end as _ {
+    if now >= vesting_end {
         return amount;
     }
 
-    let vest_per_second = amount / config.vesting_duration as u128;
+    let vest_per_second = amount / u128::from(vesting_end - cliff_end);
     let seconds_ellapsed = (now - cliff_end) as u128;
 
     return vest_per_second
@@ -29,65 +25,40 @@ pub(crate) fn calculate_vested_amount(
 
 #[cfg(test)]
 mod tests {
-    use crate::{vesting::calculate_vested_amount, Config};
+    use crate::vesting::calculate_vested_amount;
 
     #[test]
     fn test_vesting_calculation() {
         let amount = 946_080_000_000_000_000_000_000_000;
+        let cliff_duration = 31536000;
+        let vesting_duration = 94608000;
         let issue_at = 1704067200;
-        let config = &Config {
-            cliff_duration: 31536000,
-            vesting_duration: 94608000,
-        };
+        let cliff_end = issue_at + cliff_duration;
+        let vesting_end = cliff_end + vesting_duration;
 
         assert_eq!(
             0,
-            calculate_vested_amount(
-                issue_at + config.cliff_duration - 1_000,
-                config,
-                issue_at,
-                amount
-            )
+            calculate_vested_amount(cliff_end - 1_000, cliff_end, vesting_end, amount)
         );
 
         assert_eq!(
             amount,
-            calculate_vested_amount(
-                issue_at + config.cliff_duration + config.vesting_duration + 1_000,
-                config,
-                issue_at,
-                amount
-            )
+            calculate_vested_amount(vesting_end + 1_000, cliff_end, vesting_end, amount)
         );
 
         assert_eq!(
             10_000_000_000_000_000_000,
-            calculate_vested_amount(
-                issue_at + config.cliff_duration + 1,
-                config,
-                issue_at,
-                amount
-            )
+            calculate_vested_amount(cliff_end + 1, cliff_end, vesting_end, amount)
         );
 
         assert_eq!(
             864_000_000_000_000_000_000_000,
-            calculate_vested_amount(
-                issue_at + config.cliff_duration + 60 * 60 * 24,
-                config,
-                issue_at,
-                amount
-            )
+            calculate_vested_amount(cliff_end + 60 * 60 * 24, cliff_end, vesting_end, amount)
         );
 
         assert_eq!(
             999_990_000_000_000_000_000_000,
-            calculate_vested_amount(
-                issue_at + config.cliff_duration + 99_999,
-                config,
-                issue_at,
-                amount
-            )
+            calculate_vested_amount(cliff_end + 99_999, cliff_end, vesting_end, amount)
         );
     }
 }
