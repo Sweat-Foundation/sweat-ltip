@@ -552,6 +552,7 @@ mod tests {
     use rstest::*;
 
     use crate::{
+        common::{ToOtto, ONE_DAY_IN_SECONDS, ONE_YEAR_IN_SECONDS},
         grant::{GrantApi, TransferKey},
         testing_api::DEFAULT_CLIFF,
         tests::context::TestContext,
@@ -871,29 +872,215 @@ mod tests {
         assert_eq!(grant.total_amount.0, 10_000);
     }
 
+    const GRANT_CLIFF_DURATION: u32 = ONE_YEAR_IN_SECONDS; // 1 year in seconds
+    const GRANT_VESTING_DURATION: u32 = 3 * ONE_YEAR_IN_SECONDS; // 3 years in seconds
+
     #[rstest]
-    fn claim_during_vesting(
+    fn test_terminate_before_cliff_cancels_order(
         mut context: TestContext,
-        #[with(365 * 24 * 60 * 60, 3 * 365 * 24 * 60 * 60)] mut contract: Contract,
+        #[with(GRANT_CLIFF_DURATION, GRANT_VESTING_DURATION)] mut contract: Contract,
         alice: AccountId,
     ) {
-        let issue_at = 1717200000;
-        contract.create_grant_internal(
-            &alice,
-            issue_at,
-            4_000_000_000_000_000_000_000_000_000.into(),
-            Some(481_065_026_213_428_039_912_058.into()),
-        );
+        let grant_amount = 94_670_856u128.to_otto(); // 94670856 tokens
+        let issue_at = 1_000;
+        let cliff_end = issue_at + GRANT_CLIFF_DURATION;
+        let terminate_at = cliff_end - ONE_DAY_IN_SECONDS;
 
-        // elapsed 12 671 300 seconds
-        context.set_block_timestamp_in_seconds(1761407300);
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Claim at 1000 seconds after cliff end
+        context.set_block_timestamp_in_seconds(cliff_end + 1_000);
         context.switch_account(&alice);
-
         contract.claim();
-        let account = contract.get_account(&alice).unwrap();
-        assert_eq!(
-            535_257_984_525_621_511_917_601_542,
-            account.grants.first().unwrap().order_amount.0
-        );
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.order_amount.0, 1_000u128.to_otto());
+
+        // Terminate at cliff_end - one day (set block timestamp to termination time)
+        context.switch_to_executor();
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.order_amount.0, 0);
+        assert_eq!(grant.total_amount.0, 0);
+        assert_eq!(grant.claimed_amount.0, 0);
+    }
+
+    #[rstest]
+    fn test_terminate_after_buy_sets_total_to_claimed(
+        mut context: TestContext,
+        #[with(GRANT_CLIFF_DURATION, GRANT_VESTING_DURATION)] mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 94_670_856u128.to_otto(); // 94670856 tokens
+        let issue_at = 1_000;
+        let cliff_end = issue_at + GRANT_CLIFF_DURATION;
+
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Claim at 1000 seconds after cliff end
+        context.set_block_timestamp_in_seconds(cliff_end + 1_000);
+        context.switch_account(&alice);
+        contract.claim();
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.order_amount.0, 1_000u128.to_otto());
+
+        // Executor buys 100% of the order
+        context.switch_to_executor();
+        contract.buy(vec![alice.clone()], 10_000); // 100%
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.claimed_amount.0, 1_000u128.to_otto());
+        assert_eq!(grant.order_amount.0, 0);
+
+        // 1000 seconds later, terminate the grant at the timestamp when vested equals claimed
+        // (terminate at cliff_end + 1000 to get total = claimed = 1000)
+        let terminate_at = cliff_end + 1_000;
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.total_amount.0, 1_000u128.to_otto());
+        assert_eq!(grant.claimed_amount.0, 1_000u128.to_otto());
+        assert_eq!(grant.order_amount.0, 0);
+    }
+
+    #[rstest]
+    fn test_terminate_cuts_order_to_vested_amount(
+        mut context: TestContext,
+        #[with(GRANT_CLIFF_DURATION, GRANT_VESTING_DURATION)] mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 94_670_856u128.to_otto(); // 94670856 tokens
+        let issue_at = 1_000;
+        let cliff_end = issue_at + GRANT_CLIFF_DURATION;
+        let terminate_at = cliff_end + 500;
+
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Claim at 1000 seconds after cliff end
+        context.set_block_timestamp_in_seconds(cliff_end + 1_000);
+        context.switch_account(&alice);
+        contract.claim();
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.order_amount.0, 1_000u128.to_otto());
+
+        // Terminate at 500 seconds after cliff end (cutting the order)
+        // Set block timestamp to termination time so vested calculation uses that
+        context.switch_to_executor();
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.order_amount.0, 500u128.to_otto());
+        assert_eq!(grant.total_amount.0, 500u128.to_otto());
+    }
+
+    #[rstest]
+    fn test_terminate_after_buy_preserves_claimed_amount(
+        mut context: TestContext,
+        #[with(GRANT_CLIFF_DURATION, GRANT_VESTING_DURATION)] mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 94_670_856u128.to_otto(); // 94670856 tokens
+        let issue_at = 1_000;
+        let cliff_end = issue_at + GRANT_CLIFF_DURATION;
+        let terminate_at = cliff_end + 500;
+
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Claim at 1000 seconds after cliff end
+        context.set_block_timestamp_in_seconds(cliff_end + 1_000);
+        context.switch_account(&alice);
+        contract.claim();
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.order_amount.0, 1_000u128.to_otto());
+
+        // Executor buys 100% of the order
+        context.switch_to_executor();
+        contract.buy(vec![alice.clone()], 10_000); // 100%
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.claimed_amount.0, 1_000u128.to_otto());
+
+        // Terminate at 500 seconds after cliff end
+        // Set block timestamp to termination time
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.total_amount.0, 1_000u128.to_otto());
+    }
+
+    #[rstest]
+    fn test_terminate_before_cliff_sets_total_to_zero(
+        mut context: TestContext,
+        #[with(GRANT_CLIFF_DURATION, GRANT_VESTING_DURATION)] mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 94_670_856u128.to_otto(); // 94670856 tokens
+        let issue_at = 1_000;
+        let cliff_end = issue_at + GRANT_CLIFF_DURATION;
+        let terminate_at = cliff_end - 1_000;
+
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Terminate 1000 seconds before cliff end
+        context.switch_to_executor();
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.total_amount.0, 0);
+    }
+
+    #[rstest]
+    fn test_terminate_twice_fails(
+        mut context: TestContext,
+        #[with(GRANT_CLIFF_DURATION, GRANT_VESTING_DURATION)] mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 94_670_856u128.to_otto(); // 94670856 tokens
+        let issue_at = 1_000;
+        let cliff_end = issue_at + GRANT_CLIFF_DURATION;
+
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Terminate 5000 seconds after cliff end
+        context.switch_to_executor();
+        let first_terminate_at = cliff_end + 5_000;
+        context.set_block_timestamp_in_seconds(first_terminate_at);
+        contract.terminate(alice.clone(), first_terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.total_amount.0, 5_000u128.to_otto());
+
+        // Try to terminate again at 1000 seconds after cliff (should fail/no-op)
+        // The terminate function returns early if already terminated, so it doesn't panic
+        // but the state shouldn't change
+        let second_terminate_at = cliff_end + 1_000;
+        context.set_block_timestamp_in_seconds(second_terminate_at);
+        contract.terminate(alice.clone(), second_terminate_at);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        // Should remain unchanged (still at 5000)
+        assert_eq!(grant.total_amount.0, 5_000u128.to_otto());
     }
 }
