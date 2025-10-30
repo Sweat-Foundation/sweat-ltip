@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use near_sdk::{test_utils::VMContextBuilder, testing_env, AccountId, PromiseResult};
+use near_sdk::{test_utils::VMContextBuilder, testing_env, AccountId, Gas, PromiseResult};
 
 use super::fixtures::{executor, issuer};
 
@@ -57,5 +57,18 @@ impl TestContext {
             Default::default(),
             results,
         );
+    }
+
+    pub fn with_gas_attached<F, R>(&mut self, gas: Gas, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        testing_env!(self.builder.prepaid_gas(gas).build());
+
+        let result = f();
+
+        testing_env!(self.builder.prepaid_gas(Gas::from_tgas(100)).build());
+
+        result
     }
 }

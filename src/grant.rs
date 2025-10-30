@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    common::now,
+    common::{assert_gas, now},
     event::{LtipEvent, OrderUpdateData},
     vesting::calculate_vested_amount,
     Account, Config, Contract, ContractExt, Grant, Role,
@@ -14,9 +14,14 @@ use near_sdk::{
     json_types::U128,
     near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
 };
-use near_sdk_contract_tools::{pause::Pause, rbac::Rbac, standard::nep297::Event};
+use near_sdk_contract_tools::{
+    ft::nep141::{GAS_FOR_FT_TRANSFER_CALL, MORE_GAS_FAIL_MESSAGE},
+    nft::nep171::GAS_FOR_RESOLVE_TRANSFER,
+    pause::Pause,
+    rbac::Rbac,
+    standard::nep297::Event,
+};
 
-const GAS_PER_TRANSFER: near_sdk::Gas = near_sdk::Gas::from_tgas(10);
 const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,6 +191,12 @@ impl GrantApi for Contract {
             return;
         }
 
+        assert_gas(
+            (GAS_FOR_FT_TRANSFER_CALL.saturating_add(GAS_FOR_CALLBACK)).as_gas()
+                * transfers.len() as u64,
+            || "Transfer on `authorize` call.",
+        );
+
         let mut batch_promise = Promise::new(self.token_id.clone());
         for (account_id, amount) in transfers {
             batch_promise = batch_promise.function_call(
@@ -196,7 +207,7 @@ impl GrantApi for Contract {
                 }))
                 .unwrap(),
                 NearToken::from_yoctonear(1),
-                GAS_PER_TRANSFER,
+                GAS_FOR_FT_TRANSFER_CALL,
             );
         }
 
@@ -536,7 +547,7 @@ impl Config {
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
 
-    use near_sdk::{json_types::U128, test_utils::accounts, AccountId, PromiseResult};
+    use near_sdk::{json_types::U128, test_utils::accounts, AccountId, Gas, PromiseResult};
     use near_sdk_contract_tools::pause::Pause;
     use rstest::*;
 
@@ -686,6 +697,31 @@ mod tests {
         assert!(contract.get_pending_transfers().is_empty());
     }
 
+    #[rstest]
+    #[should_panic(expected = "Not enough gas left.")]
+    fn authorize_fails_with_insufficient_gas(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(&alice, 1_000, 10_000.into(), None);
+
+        {
+            let grant = contract
+                .accounts
+                .get_mut(&alice)
+                .unwrap()
+                .grants
+                .get_mut(&DEFAULT_CLIFF)
+                .unwrap();
+            grant.order_amount = U128::from(100);
+        }
+
+        context.switch_to_executor();
+        context.with_gas_attached(Gas::from_tgas(1), || {
+            contract.authorize(vec![alice.clone()], Some(10_000));
+        });
+    }
     #[rstest]
     fn on_authorize_complete_reverts_failed_transfers_using_keys(
         mut context: TestContext,
