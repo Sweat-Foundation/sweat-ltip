@@ -60,110 +60,130 @@ impl AuthApi for Contract {
 mod tests {
     use std::panic::{self, AssertUnwindSafe};
 
-    use near_sdk::test_utils::accounts;
+    use near_sdk::AccountId;
+    use rstest::*;
 
     use crate::{
         auth::{AuthApi, Role},
-        testing_api::{init_contract_with_spare, set_predecessor},
+        tests::context::TestContext,
+        tests::fixtures::*,
+        Contract,
     };
 
-    #[test]
-    fn grant_and_revoke_role() {
-        set_predecessor(&accounts(0), 0);
-        let mut contract = init_contract_with_spare(0);
+    #[rstest]
+    fn grant_and_revoke_role(
+        mut context: TestContext,
+        mut contract: Contract,
+        owner: AccountId,
+        alice: AccountId,
+    ) {
+        context.switch_account(&owner);
+        contract.grant_role(&alice, Role::Executor);
+        assert!(contract.has_role(&alice, Role::Executor));
 
-        contract.grant_role(&accounts(1), Role::Executor);
-        assert!(contract.has_role(&accounts(1), Role::Executor));
-
-        contract.revoke_role(&accounts(1), Role::Executor);
-        assert!(!contract.has_role(&accounts(1), Role::Executor));
+        contract.revoke_role(&alice, Role::Executor);
+        assert!(!contract.has_role(&alice, Role::Executor));
     }
 
-    #[test]
-    #[should_panic]
-    fn grant_role_requires_owner() {
-        set_predecessor(&accounts(0), 0);
-        let mut contract = init_contract_with_spare(0);
+    #[rstest]
+    fn grant_role_requires_owner(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        context.switch_account(&alice);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.grant_role(&bob, Role::Issuer);
+        }));
 
-        set_predecessor(&accounts(1), 0);
-        let err = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.grant_role(&accounts(2), Role::Issuer);
-        }))
-        .err()
-        .expect("grant_role should panic for non-owners");
-
-        assert!(!contract.has_role(&accounts(2), Role::Issuer));
-        panic::resume_unwind(err);
+        assert!(result.is_err());
+        assert!(!contract.has_role(&bob, Role::Issuer));
     }
 
-    #[test]
-    #[should_panic]
-    fn revoke_role_requires_owner() {
-        set_predecessor(&accounts(0), 0);
-        let mut contract = init_contract_with_spare(0);
-        contract.grant_role(&accounts(1), Role::Executor);
-        assert!(contract.has_role(&accounts(1), Role::Executor));
+    #[rstest]
+    fn revoke_role_requires_owner(
+        mut context: TestContext,
+        mut contract: Contract,
+        owner: AccountId,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        context.switch_account(&owner);
+        contract.grant_role(&alice, Role::Executor);
+        assert!(contract.has_role(&alice, Role::Executor));
 
-        set_predecessor(&accounts(2), 0);
-        let err = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.revoke_role(&accounts(1), Role::Executor);
-        }))
-        .err()
-        .expect("revoke_role should panic for non-owners");
+        context.switch_account(&bob);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.revoke_role(&alice, Role::Executor);
+        }));
 
-        assert!(contract.has_role(&accounts(1), Role::Executor));
-        panic::resume_unwind(err);
+        assert!(result.is_err());
+        assert!(contract.has_role(&alice, Role::Executor));
     }
 
-    #[test]
-    fn members_returns_all_role_holders() {
-        set_predecessor(&accounts(0), 0);
-        let mut contract = init_contract_with_spare(0);
-
-        contract.grant_role(&accounts(1), Role::Issuer);
-        contract.grant_role(&accounts(2), Role::Issuer);
+    #[rstest]
+    fn members_returns_all_role_holders(
+        mut context: TestContext,
+        mut contract: Contract,
+        owner: AccountId,
+        issuer: AccountId,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        context.switch_account(&owner);
+        contract.grant_role(&alice, Role::Issuer);
+        contract.grant_role(&bob, Role::Issuer);
 
         let mut members = contract.members(Role::Issuer);
         members.sort();
 
-        assert_eq!(members, vec![accounts(0), accounts(1), accounts(2)]);
+        // Contract fixture grants Issuer role to issuer, and we grant it to alice and bob
+        assert!(members.contains(&issuer));
+        assert!(members.contains(&alice));
+        assert!(members.contains(&bob));
+        assert_eq!(members.len(), 3);
     }
 
-    #[test]
-    #[should_panic]
-    fn non_owner_with_role_cannot_grant_roles() {
-        set_predecessor(&accounts(0), 0);
-        let mut contract = init_contract_with_spare(0);
-        contract.grant_role(&accounts(1), Role::Executor);
-        assert!(contract.has_role(&accounts(1), Role::Executor));
+    #[rstest]
+    fn non_owner_with_role_cannot_grant_roles(
+        mut context: TestContext,
+        mut contract: Contract,
+        owner: AccountId,
+        alice: AccountId,
+        bob: AccountId,
+    ) {
+        context.switch_account(&owner);
+        contract.grant_role(&alice, Role::Executor);
+        assert!(contract.has_role(&alice, Role::Executor));
 
-        set_predecessor(&accounts(1), 0);
-        let err = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.grant_role(&accounts(2), Role::Issuer);
-        }))
-        .err()
-        .expect("grant_role should panic for non-owners");
+        context.switch_account(&alice);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.grant_role(&bob, Role::Issuer);
+        }));
 
-        assert!(!contract.has_role(&accounts(2), Role::Issuer));
-        panic::resume_unwind(err);
+        assert!(result.is_err());
+        assert!(!contract.has_role(&bob, Role::Issuer));
     }
 
-    #[test]
-    #[should_panic]
-    fn non_owner_with_role_cannot_revoke_roles() {
-        set_predecessor(&accounts(0), 0);
-        let mut contract = init_contract_with_spare(0);
-        contract.grant_role(&accounts(1), Role::Executor);
-        assert!(contract.has_role(&accounts(1), Role::Executor));
+    #[rstest]
+    fn non_owner_with_role_cannot_revoke_roles(
+        mut context: TestContext,
+        mut contract: Contract,
+        owner: AccountId,
+        issuer: AccountId,
+        alice: AccountId,
+    ) {
+        context.switch_account(&owner);
+        contract.grant_role(&alice, Role::Executor);
+        assert!(contract.has_role(&alice, Role::Executor));
 
-        set_predecessor(&accounts(1), 0);
-        let err = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.revoke_role(&accounts(0), Role::Issuer);
-        }))
-        .err()
-        .expect("revoke_role should panic for non-owners");
+        context.switch_account(&alice);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.revoke_role(&issuer, Role::Issuer);
+        }));
 
-        assert!(contract.has_role(&accounts(0), Role::Issuer));
-        panic::resume_unwind(err);
+        assert!(result.is_err());
+        assert!(contract.has_role(&issuer, Role::Issuer));
     }
 }

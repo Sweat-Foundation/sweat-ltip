@@ -42,27 +42,16 @@ impl InitApi for Contract {
 
 #[cfg(test)]
 mod tests {
-    use near_sdk::test_utils::accounts;
+    use near_sdk::AccountId;
     use near_sdk_contract_tools::owner::OwnerExternal;
+    use rstest::rstest;
 
-    use crate::{
-        init::InitApi,
-        testing_api::{init_contract_with_spare, set_predecessor},
-        Contract,
-    };
+    use crate::{init::InitApi, tests::fixtures::*, Contract};
 
-    #[test]
-    fn init_assigns_owner() {
-        set_predecessor(&accounts(0), 0);
-        let contract = Contract::new(accounts(0), 10, 20, accounts(1));
+    #[rstest]
+    fn init_assigns_owner(owner: AccountId, token: AccountId) {
+        let contract = Contract::new(token, 10, 20, owner.clone());
 
-        assert_eq!(contract.own_get_owner().unwrap(), accounts(1));
-    }
-
-    #[test]
-    fn init_helper_sets_spare_balance() {
-        set_predecessor(&accounts(0), 0);
-        let contract = init_contract_with_spare(1_000);
-        assert_eq!(contract.spare_balance.0, 1_000);
+        assert_eq!(contract.own_get_owner().unwrap(), owner);
     }
 }
