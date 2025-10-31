@@ -10,6 +10,7 @@ export type Grant = {
   vested_amount: string;
   not_vested_amount: string;
   claimable_amount: string;
+  terminated_at: number | undefined;
 };
 
 export type Account = {
@@ -40,4 +41,10 @@ export async function ft_balance(ft: NearAccount, account: NearAccount): Promise
   const balance: string = await ft.view('ft_balance_of', { account_id: account.accountId });
 
   return BigInt(balance);
+}
+
+export const ONE_DAY_IN_SECONDS = 86_400;
+
+export function now(): number {
+  return Math.floor(Date.now() / 1000);
 }

@@ -373,13 +373,17 @@ impl GrantApi for Contract {
         Self::require_role(&Role::Executor);
         Self::require_unpaused();
 
+        let mut unvested_amounts = vec![];
         if let Some(account) = self.accounts.get_mut(&account_id) {
             for (issue_at, grant) in account.grants.iter_mut() {
-                let unvested_amount = grant.terminate(*issue_at, &self.config, timestamp);
+                let unvested_amount = grant.terminate(issue_at.clone(), &self.config, timestamp);
 
+                unvested_amounts.push((*issue_at, unvested_amount));
                 self.spare_balance.0 += unvested_amount;
             }
         }
+
+        LtipEvent::Terminate((account_id, unvested_amounts)).emit();
     }
 }
 
