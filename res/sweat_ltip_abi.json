@@ -2,12 +2,12 @@
   "schema_version": "0.4.0",
   "metadata": {
     "name": "sweat-ltip",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "build": {
       "compiler": "rustc 1.86.0",
       "builder": "cargo-near cargo-near-build 0.9.0"
     },
-    "wasm_hash": "9wrSQkFV29ReDzqbL6F6VwKwyNLTPcLgMQkGhWZBopxa"
+    "wasm_hash": "5PGDVxteMk9Cqs7SrYnCxM82Ud5KeLupEuhe9WtNTotJ"
   },
   "body": {
     "functions": [
