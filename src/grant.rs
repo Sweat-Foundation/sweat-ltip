@@ -15,11 +15,7 @@ use near_sdk::{
     near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
 };
 use near_sdk_contract_tools::{
-    ft::nep141::{GAS_FOR_FT_TRANSFER_CALL, MORE_GAS_FAIL_MESSAGE},
-    nft::nep171::GAS_FOR_RESOLVE_TRANSFER,
-    pause::Pause,
-    rbac::Rbac,
-    standard::nep297::Event,
+    ft::nep141::GAS_FOR_FT_TRANSFER_CALL, pause::Pause, rbac::Rbac, standard::nep297::Event,
 };
 
 const GAS_FOR_CALLBACK: near_sdk::Gas = near_sdk::Gas::from_tgas(5);
