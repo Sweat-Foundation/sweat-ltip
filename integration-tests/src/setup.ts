@@ -20,7 +20,7 @@ export function createProdMirrotTest(): TestFn<Context> {
     const contract = await root.importContract({
       mainnetContract: 'ltip.sweat',
       withData: true,
-      blockId: 169_690_297,
+      blockId: 170662690,
     });
     await contract.deploy('../res/sweat_ltip.wasm');
 

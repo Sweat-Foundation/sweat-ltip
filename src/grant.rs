@@ -499,9 +499,8 @@ impl Grant {
             return 0;
         }
 
-        let now = now();
         let vested_amount =
-            calculate_vested_amount(now, cliff_end, vesting_end, self.total_amount.0);
+            calculate_vested_amount(terminate_at, cliff_end, vesting_end, self.total_amount.0);
 
         if vested_amount >= self.claimed_amount.0 {
             self.terminated_at = terminate_at.into();
@@ -814,6 +813,29 @@ mod tests {
         let grant = account.grants.get(&1_000).unwrap();
         assert_eq!(grant.order_amount.0, 0);
         assert_eq!(grant.total_amount.0, 2_000);
+    }
+
+    #[rstest]
+    fn terminate_in_future(
+        mut context: TestContext,
+        #[with(31536000, 94608000)] mut contract: Contract,
+        alice: AccountId,
+    ) {
+        contract.create_grant_internal(
+            &alice,
+            1717200000,
+            500_000_000_000_000_000_000.into(),
+            None,
+        );
+
+        context.set_block_timestamp_in_seconds(1761933900);
+
+        context.switch_to_executor();
+        contract.terminate(alice.clone(), 1767198107);
+
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&1717200000).unwrap();
+        assert_eq!(grant.total_amount.0, 97_571_595_425_326_051_089);
     }
 
     #[rstest]
