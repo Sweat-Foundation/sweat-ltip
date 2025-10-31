@@ -1,0 +1,681 @@
+{
+  "schema_version": "0.4.0",
+  "metadata": {
+    "name": "sweat-ltip",
+    "version": "0.1.4",
+    "build": {
+      "compiler": "rustc 1.86.0",
+      "builder": "cargo-near cargo-near-build 0.9.0"
+    },
+    "wasm_hash": "CbWmJrvmUecLwJYyZgd5MdqHyrQaaNA27R33rTo8Ej1A"
+  },
+  "body": {
+    "functions": [
+      {
+        "name": "authorize",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_ids",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "name": "percentage",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "buy",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_ids",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                  "type": "string"
+                }
+              }
+            },
+            {
+              "name": "percentage",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "claim",
+        "kind": "call"
+      },
+      {
+        "name": "contract_source_metadata",
+        "kind": "view"
+      },
+      {
+        "name": "force_unpause",
+        "kind": "call"
+      },
+      {
+        "name": "ft_on_transfer",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "sender_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "amount",
+              "type_schema": {
+                "type": "string"
+              }
+            },
+            {
+              "name": "msg",
+              "type_schema": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/PromiseOrValueString"
+          }
+        }
+      },
+      {
+        "name": "get_account",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/AccountView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "get_config",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "$ref": "#/definitions/Config"
+          }
+        }
+      },
+      {
+        "name": "get_orders",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": [
+                {
+                  "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0.0
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 3,
+              "minItems": 3
+            }
+          }
+        }
+      },
+      {
+        "name": "get_pending_transfers",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0.0
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "maxItems": 2,
+                "minItems": 2
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "get_spare_balance",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "name": "grant_role",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "role",
+              "type_schema": {
+                "$ref": "#/definitions/Role"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "has_role",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "role",
+              "type_schema": {
+                "$ref": "#/definitions/Role"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "issue",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "issue_at",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "grants",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": [
+                    {
+                      "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                      "type": "string"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "maxItems": 2,
+                  "minItems": 2
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "members",
+        "kind": "view",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "role",
+              "type_schema": {
+                "$ref": "#/definitions/Role"
+              }
+            }
+          ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "array",
+            "items": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "new",
+        "kind": "call",
+        "modifiers": [
+          "init"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "token_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "cliff_duration",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "vesting_duration",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "owner_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "on_authorize_complete",
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "transfer_keys",
+              "type_schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/TransferKey"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "own_accept_owner",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ]
+      },
+      {
+        "name": "own_get_owner",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
+        "name": "own_get_proposed_owner",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      {
+        "name": "own_propose_owner",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ],
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "own_renounce_owner",
+        "kind": "call",
+        "modifiers": [
+          "payable"
+        ]
+      },
+      {
+        "name": "paus_is_paused",
+        "kind": "view",
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "boolean"
+          }
+        }
+      },
+      {
+        "name": "revoke_role",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "role",
+              "type_schema": {
+                "$ref": "#/definitions/Role"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "terminate",
+        "kind": "call",
+        "params": {
+          "serialization_type": "json",
+          "args": [
+            {
+              "name": "account_id",
+              "type_schema": {
+                "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+                "type": "string"
+              }
+            },
+            {
+              "name": "timestamp",
+              "type_schema": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "upgrade",
+        "kind": "call",
+        "params": {
+          "serialization_type": "borsh",
+          "args": [
+            {
+              "name": "code",
+              "type_schema": {
+                "declaration": "Vec<u8>",
+                "definitions": {
+                  "Vec<u8>": {
+                    "Sequence": {
+                      "length_width": 4,
+                      "length_range": {
+                        "start": 0,
+                        "end": 4294967295
+                      },
+                      "elements": "u8"
+                    }
+                  },
+                  "u8": {
+                    "Primitive": 1
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "root_schema": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "String",
+      "type": "string",
+      "definitions": {
+        "AccountView": {
+          "type": "object",
+          "required": [
+            "account_id",
+            "grants"
+          ],
+          "properties": {
+            "account_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "grants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/GrantView"
+              }
+            }
+          }
+        },
+        "Config": {
+          "type": "object",
+          "required": [
+            "cliff_duration",
+            "vesting_duration"
+          ],
+          "properties": {
+            "cliff_duration": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "vesting_duration": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "GrantView": {
+          "type": "object",
+          "required": [
+            "claimable_amount",
+            "claimed_amount",
+            "cliff_end_at",
+            "issued_at",
+            "not_vested_amount",
+            "order_amount",
+            "total_amount",
+            "vested_amount",
+            "vesting_end_at"
+          ],
+          "properties": {
+            "claimable_amount": {
+              "type": "string"
+            },
+            "claimed_amount": {
+              "type": "string"
+            },
+            "cliff_end_at": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "issued_at": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "not_vested_amount": {
+              "type": "string"
+            },
+            "order_amount": {
+              "type": "string"
+            },
+            "terminated_at": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "total_amount": {
+              "type": "string"
+            },
+            "vested_amount": {
+              "type": "string"
+            },
+            "vesting_end_at": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        "PromiseOrValueString": {
+          "type": "string"
+        },
+        "Role": {
+          "type": "string",
+          "enum": [
+            "issuer",
+            "executor",
+            "predecessor"
+          ]
+        },
+        "TransferKey": {
+          "type": "object",
+          "required": [
+            "account_id",
+            "issue_at"
+          ],
+          "properties": {
+            "account_id": {
+              "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
+              "type": "string"
+            },
+            "issue_at": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        }
+      }
+    }
+  }
+}
