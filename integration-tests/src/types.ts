@@ -30,7 +30,7 @@ export function hasError(result: TransactionResult, error: string): boolean {
   }) >= 0;
 }
 
-type Error = {
+export type Error = {
   ActionError: {
     index: number,
     kind: object

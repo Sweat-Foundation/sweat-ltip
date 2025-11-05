@@ -2,12 +2,12 @@
   "schema_version": "0.4.0",
   "metadata": {
     "name": "sweat-ltip",
-    "version": "0.1.6",
+    "version": "0.1.7",
     "build": {
       "compiler": "rustc 1.86.0",
       "builder": "cargo-near cargo-near-build 0.9.0"
     },
-    "wasm_hash": "4owcw3XnxKFAQn93LAZQgmwv2sbKoUt699Gqz1aQnbVD"
+    "wasm_hash": "wJwhTz4hdfcfEQ3XwTZHukjEEzo8BPZPKLTfrFFcWUw"
   },
   "body": {
     "functions": [
@@ -382,6 +382,7 @@
       },
       {
         "name": "on_authorize_complete",
+        "doc": " According to this doc, we only can process a single result. If it's a failure, we consider all transfers failed.\n https://docs.near.org/smart-contracts/anatomy/crosscontract#multiple-functions-same-contract",
         "kind": "call",
         "modifiers": [
           "private"

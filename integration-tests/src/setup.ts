@@ -20,7 +20,7 @@ export function createProdMirrotTest(): TestFn<Context> {
     const contract = await root.importContract({
       mainnetContract: 'ltip.sweat',
       withData: true,
-      blockId: 170662690,
+      blockId: 171390050,
     });
     await contract.deploy('../res/sweat_ltip.wasm');
 
@@ -99,7 +99,15 @@ export async function prepareContext(cliff_duration?: number | null, full_unlock
     contract.viewStateRaw(),
   ]);
 
-  await writeFile('state', JSON.stringify({ ft: ftState, ltip: ltipState }), 'utf-8');
+  // await writeFile('state', JSON.stringify({ ft: ftState, ltip: ltipState }), 'utf-8');
+  const accounts = { root, contract, ft, alice, bob, owner, issuer, executor } as const;
+
+  const accountsLogged = wrapAccounts(accounts);
+
+  return {
+    worker,
+    accounts: accountsLogged
+  }
 }
 
 export function createTest(cliff_duration?: number | null, full_unlock_duration?: number | null): TestFn<Context> {
@@ -107,7 +115,8 @@ export function createTest(cliff_duration?: number | null, full_unlock_duration?
 
   test.before(async t => {
     try {
-      t.context = await loadContext();
+      // t.context = await loadContext();
+      t.context = await prepareContext(cliff_duration, full_unlock_duration);
     } catch (err) {
       console.error(err);
     }

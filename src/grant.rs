@@ -11,8 +11,9 @@ use crate::{
 };
 use near_sdk::{
     env::{self, log_str, panic_str},
+    is_promise_success,
     json_types::U128,
-    near, require, serde_json, AccountId, NearToken, Promise, PromiseResult,
+    near, require, serde_json, AccountId, NearToken, Promise,
 };
 use near_sdk_contract_tools::{
     ft::nep141::GAS_FOR_FT_TRANSFER_CALL, pause::Pause, rbac::Rbac, standard::nep297::Event,
@@ -54,9 +55,6 @@ pub trait GrantApi {
 
     /// Authorizes payment for outstanding orders on the supplied accounts using an optional basis-point percentage.
     fn authorize(&mut self, account_ids: Vec<AccountId>, percentage: Option<u32>);
-
-    /// Callback invoked after batched FT transfers to reconcile pending transfers with on-chain state.
-    fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>);
 
     /// Issues grants for the specified timestamp, reducing spare balance accordingly.
     fn issue(&mut self, issue_at: u32, grants: Vec<(AccountId, U128)>);
@@ -184,6 +182,8 @@ impl GrantApi for Contract {
         }
 
         if transfers.is_empty() {
+            self.unpause();
+
             return;
         }
 
@@ -218,58 +218,6 @@ impl GrantApi for Contract {
                 GAS_FOR_CALLBACK,
             ),
         );
-    }
-
-    #[private]
-    fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>) {
-        log_str(&format!(
-            "Authorize batch completed: {} transfers processed",
-            transfer_keys.len()
-        ));
-        Self::require_paused();
-
-        for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
-            #[allow(unreachable_patterns)]
-            match env::promise_result(transfer_index as u64) {
-                PromiseResult::Successful(_) => {
-                    log_str(&format!("Transfer {} succeeded", transfer_index));
-                }
-                PromiseResult::Failed => {
-                    log_str(&format!(
-                        "Transfer {} failed, reverting claimed_amount",
-                        transfer_index
-                    ));
-
-                    let failed_amount = self
-                        .pending_transfers
-                        .get(&transfer_key.account_id)
-                        .and_then(|account_transfers| {
-                            account_transfers
-                                .iter()
-                                .find(|(issue_at, _)| issue_at == &transfer_key.issue_at)
-                                .map(|(_, amount)| amount.0)
-                        });
-
-                    if let Some(amount) = failed_amount {
-                        if let Some(account) = self.accounts.get_mut(&transfer_key.account_id) {
-                            if let Some(grant) = account.grants.get_mut(&transfer_key.issue_at) {
-                                grant.claimed_amount.0 -= amount;
-                                grant.order_amount.0 += amount;
-                            }
-                        }
-                    } else {
-                        log_str(&format!(
-                            "No pending transfer entry for {} at issue date {}",
-                            transfer_key.account_id, transfer_key.issue_at
-                        ));
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        self.pending_transfers.clear();
-        self.unpause();
     }
 
     fn issue(&mut self, issue_at: u32, grants: Vec<(AccountId, U128)>) {
@@ -403,6 +351,58 @@ impl GrantApi for Contract {
     }
 }
 
+#[near]
+impl Contract {
+    /// According to this doc, we only can process a single result. If it's a failure, we consider all transfers failed.
+    /// https://docs.near.org/smart-contracts/anatomy/crosscontract#multiple-functions-same-contract
+    #[private]
+    pub fn on_authorize_complete(&mut self, transfer_keys: Vec<TransferKey>) {
+        log_str(&format!(
+            "Authorize batch completed: {} transfers processed",
+            transfer_keys.len()
+        ));
+        Self::require_paused();
+
+        if is_promise_success() {
+            log_str(&format!("All transfers succeeded"));
+        } else {
+            for (transfer_index, transfer_key) in transfer_keys.iter().enumerate() {
+                log_str(&format!(
+                    "Transfer {} failed, reverting claimed_amount",
+                    transfer_index
+                ));
+
+                let failed_amount = self
+                    .pending_transfers
+                    .get(&transfer_key.account_id)
+                    .and_then(|account_transfers| {
+                        account_transfers
+                            .iter()
+                            .find(|(issue_at, _)| issue_at == &transfer_key.issue_at)
+                            .map(|(_, amount)| amount.0)
+                    });
+
+                if let Some(amount) = failed_amount {
+                    if let Some(account) = self.accounts.get_mut(&transfer_key.account_id) {
+                        if let Some(grant) = account.grants.get_mut(&transfer_key.issue_at) {
+                            grant.claimed_amount.0 -= amount;
+                            grant.order_amount.0 += amount;
+                        }
+                    }
+                } else {
+                    log_str(&format!(
+                        "No pending transfer entry for {} at issue date {}",
+                        transfer_key.account_id, transfer_key.issue_at
+                    ));
+                }
+            }
+        }
+
+        self.pending_transfers.clear();
+        self.unpause();
+    }
+}
+
 impl Contract {
     fn decline_orders(&mut self, account_ids: Vec<AccountId>) {
         for account_id in account_ids {
@@ -426,7 +426,9 @@ impl Contract {
             }
         }
 
-        self.unpause();
+        if Self::is_paused() {
+            self.unpause();
+        }
     }
 
     pub(crate) fn create_grant_internal(
@@ -743,6 +745,7 @@ mod tests {
             contract.authorize(vec![alice.clone()], Some(10_000));
         });
     }
+
     #[rstest]
     fn on_authorize_complete_reverts_failed_transfers_using_keys(
         mut context: TestContext,
