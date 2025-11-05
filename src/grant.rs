@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     common::{assert_gas, now},
-    event::{LtipEvent, OrderUpdateData},
+    event::{BuyData, LtipEvent, OrderUpdateData, TerminationData},
     vesting::calculate_vested_amount,
     Account, Config, Contract, ContractExt, Grant, Role,
 };
@@ -62,7 +62,7 @@ pub trait GrantApi {
     fn issue(&mut self, issue_at: u32, grants: Vec<(AccountId, U128)>);
 
     /// Executes a buyback against the provided accounts by the given percentage (basis points).
-    fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32);
+    fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32) -> U128;
 
     /// Returns all outstanding orders (account, issue date, order amount).
     fn get_orders(&self) -> Vec<(AccountId, u32, U128)>;
@@ -278,15 +278,16 @@ impl GrantApi for Contract {
         self.issue_internal(issue_at, grants);
     }
 
-    fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32) {
+    fn buy(&mut self, account_ids: Vec<AccountId>, percentage: u32) -> U128 {
         Self::require_role(&Role::Executor);
         Self::require_unpaused();
 
         if percentage == 0 {
             self.decline_orders(account_ids);
-            return;
+            return 0.into();
         }
 
+        let mut event_data = BuyData::new();
         for account_id in account_ids {
             let pending_issue_ats: HashSet<u32> = self
                 .pending_transfers
@@ -308,10 +309,18 @@ impl GrantApi for Contract {
                     let bought_amount = (order_amount * percentage as u128) / 10_000;
                     grant.claimed_amount = U128::from(grant.claimed_amount.0 + bought_amount);
                     grant.order_amount = U128::from(0);
-                    self.spare_balance.0 += bought_amount;
+
+                    event_data.push(&account_id, bought_amount);
                 }
             }
         }
+
+        let total_bought_amount = event_data.total_amount;
+        self.spare_balance.0 += total_bought_amount.0;
+
+        LtipEvent::Buy(event_data).emit();
+
+        total_bought_amount
     }
 
     fn get_orders(&self) -> Vec<(AccountId, u32, U128)> {
@@ -374,31 +383,23 @@ impl GrantApi for Contract {
         Self::require_unpaused();
 
         let config = self.config.clone();
-        let unvested_amounts = if let Some(issued_at) = issued_at {
+        let mut event_data = TerminationData::new(&account_id);
+
+        if let Some(issued_at) = issued_at {
             let grant = self.get_account_mut(&account_id).get_grant_mut(&issued_at);
             let unvested_amount = grant.terminate(issued_at.clone(), &config, timestamp);
 
-            vec![(issued_at, unvested_amount)]
+            event_data.push(issued_at, unvested_amount);
         } else {
-            self.get_account_mut(&account_id)
-                .grants
-                .iter_mut()
-                .map(|(issued_at, grant)| {
-                    (
-                        *issued_at,
-                        grant.terminate(issued_at.clone(), &config, timestamp),
-                    )
-                })
-                .filter(|(_, unvested_amount)| *unvested_amount > 0)
-                .collect()
+            for (issued_at, grant) in self.get_account_mut(&account_id).grants.iter_mut() {
+                let unvested_amount = grant.terminate(issued_at.clone(), &config, timestamp);
+                event_data.push(*issued_at, unvested_amount);
+            }
         };
 
-        self.spare_balance.0 += unvested_amounts
-            .iter()
-            .map(|(_, amount)| *amount)
-            .sum::<u128>();
+        self.spare_balance.0 += event_data.get_total_amount();
 
-        LtipEvent::Terminate((account_id, unvested_amounts)).emit();
+        LtipEvent::Terminate(event_data).emit();
     }
 }
 
