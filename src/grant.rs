@@ -508,6 +508,11 @@ impl Grant {
             return 0;
         }
 
+        require!(
+            terminate_at >= issue_at,
+            "Cannot terminate the Grant earlier than it was issued."
+        );
+
         let cliff_end = config.cliff_end(issue_at);
         let vesting_end = config.vesting_end(issue_at);
 
