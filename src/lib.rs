@@ -15,7 +15,8 @@ pub mod testing_api;
 use std::collections::HashMap;
 
 use near_sdk::{
-    json_types::U128, near, store::IterableMap, AccountId, BorshStorageKey, PanicOnDefault,
+    env::panic_str, json_types::U128, near, store::IterableMap, AccountId, BorshStorageKey,
+    PanicOnDefault,
 };
 use near_sdk_contract_tools::{Owner, Pause, Rbac, Upgrade};
 
@@ -45,6 +46,24 @@ pub struct Contract {
 #[derive(Clone)]
 pub struct Account {
     pub grants: HashMap<u32, Grant>,
+}
+
+impl Contract {
+    pub(crate) fn get_account_mut(&mut self, account_id: &AccountId) -> &mut Account {
+        self.accounts
+            .get_mut(account_id)
+            .unwrap_or_else(|| panic_str(format!("Account {account_id} was not found.").as_str()))
+    }
+}
+
+impl Account {
+    pub(crate) fn get_grant_mut(&mut self, issued_at: &u32) -> &mut Grant {
+        self.grants.get_mut(issued_at).unwrap_or_else(|| {
+            panic_str(
+                format!("The grant issued at {issued_at} for the account was not found.").as_str(),
+            );
+        })
+    }
 }
 
 #[near(serializers = [borsh, json])]

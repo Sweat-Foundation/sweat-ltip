@@ -77,7 +77,7 @@ pub trait GrantApi {
     fn get_pending_transfers(&self) -> HashMap<AccountId, Vec<(u32, U128)>>;
 
     /// Terminates an account's grants at the provided timestamp, adjusting totals to reflect vested amounts.
-    fn terminate(&mut self, account_id: AccountId, timestamp: u32);
+    fn terminate(&mut self, account_id: AccountId, timestamp: u32, issued_at: Option<u32>);
 }
 
 #[near]
@@ -369,19 +369,34 @@ impl GrantApi for Contract {
         self.pending_transfers.clone()
     }
 
-    fn terminate(&mut self, account_id: AccountId, timestamp: u32) {
+    fn terminate(&mut self, account_id: AccountId, timestamp: u32, issued_at: Option<u32>) {
         Self::require_role(&Role::Executor);
         Self::require_unpaused();
 
-        let mut unvested_amounts = vec![];
-        if let Some(account) = self.accounts.get_mut(&account_id) {
-            for (issue_at, grant) in account.grants.iter_mut() {
-                let unvested_amount = grant.terminate(issue_at.clone(), &self.config, timestamp);
+        let config = self.config.clone();
+        let unvested_amounts = if let Some(issued_at) = issued_at {
+            let grant = self.get_account_mut(&account_id).get_grant_mut(&issued_at);
+            let unvested_amount = grant.terminate(issued_at.clone(), &config, timestamp);
 
-                unvested_amounts.push((*issue_at, unvested_amount));
-                self.spare_balance.0 += unvested_amount;
-            }
-        }
+            vec![(issued_at, unvested_amount)]
+        } else {
+            self.get_account_mut(&account_id)
+                .grants
+                .iter_mut()
+                .map(|(issued_at, grant)| {
+                    (
+                        *issued_at,
+                        grant.terminate(issued_at.clone(), &config, timestamp),
+                    )
+                })
+                .filter(|(_, unvested_amount)| *unvested_amount > 0)
+                .collect()
+        };
+
+        self.spare_balance.0 += unvested_amounts
+            .iter()
+            .map(|(_, amount)| *amount)
+            .sum::<u128>();
 
         LtipEvent::Terminate((account_id, unvested_amounts)).emit();
     }
@@ -807,7 +822,7 @@ mod tests {
         }
 
         context.switch_to_executor();
-        contract.terminate(alice.clone(), 1_500);
+        contract.terminate(alice.clone(), 1_500, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&1_000).unwrap();
@@ -831,7 +846,7 @@ mod tests {
         context.set_block_timestamp_in_seconds(1761933900);
 
         context.switch_to_executor();
-        contract.terminate(alice.clone(), 1767198107);
+        contract.terminate(alice.clone(), 1767198107, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&1717200000).unwrap();
@@ -880,7 +895,7 @@ mod tests {
 
         context.switch_account(&bob);
         let result = panic::catch_unwind(AssertUnwindSafe(|| {
-            contract.terminate(alice.clone(), 1_500);
+            contract.terminate(alice.clone(), 1_500, None);
         }));
 
         assert!(result.is_err());
@@ -922,7 +937,7 @@ mod tests {
         // Terminate at cliff_end - one day (set block timestamp to termination time)
         context.switch_to_executor();
         context.set_block_timestamp_in_seconds(terminate_at);
-        contract.terminate(alice.clone(), terminate_at);
+        contract.terminate(alice.clone(), terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
@@ -965,7 +980,7 @@ mod tests {
         // (terminate at cliff_end + 1000 to get total = claimed = 1000)
         let terminate_at = cliff_end + 1_000;
         context.set_block_timestamp_in_seconds(terminate_at);
-        contract.terminate(alice.clone(), terminate_at);
+        contract.terminate(alice.clone(), terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
@@ -1000,7 +1015,7 @@ mod tests {
         // Set block timestamp to termination time so vested calculation uses that
         context.switch_to_executor();
         context.set_block_timestamp_in_seconds(terminate_at);
-        contract.terminate(alice.clone(), terminate_at);
+        contract.terminate(alice.clone(), terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
@@ -1041,7 +1056,7 @@ mod tests {
         // Terminate at 500 seconds after cliff end
         // Set block timestamp to termination time
         context.set_block_timestamp_in_seconds(terminate_at);
-        contract.terminate(alice.clone(), terminate_at);
+        contract.terminate(alice.clone(), terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
@@ -1064,7 +1079,7 @@ mod tests {
         // Terminate 1000 seconds before cliff end
         context.switch_to_executor();
         context.set_block_timestamp_in_seconds(terminate_at);
-        contract.terminate(alice.clone(), terminate_at);
+        contract.terminate(alice.clone(), terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
@@ -1087,7 +1102,7 @@ mod tests {
         context.switch_to_executor();
         let first_terminate_at = cliff_end + 5_000;
         context.set_block_timestamp_in_seconds(first_terminate_at);
-        contract.terminate(alice.clone(), first_terminate_at);
+        contract.terminate(alice.clone(), first_terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
@@ -1098,11 +1113,120 @@ mod tests {
         // but the state shouldn't change
         let second_terminate_at = cliff_end + 1_000;
         context.set_block_timestamp_in_seconds(second_terminate_at);
-        contract.terminate(alice.clone(), second_terminate_at);
+        contract.terminate(alice.clone(), second_terminate_at, None);
 
         let account = contract.accounts.get(&alice).unwrap();
         let grant = account.grants.get(&issue_at).unwrap();
         // Should remain unchanged (still at 5000)
         assert_eq!(grant.total_amount.0, 5_000u128.to_otto());
+    }
+
+    #[rstest]
+    fn test_terminate_single_grant_with_issued_at_single_grant(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 10_000u128.to_otto();
+        let issue_at = 1_000;
+        // terminate_at must be between cliff_end (2_000) and vesting_end (4_000)
+        let terminate_at = 3_000;
+
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Verify the grant exists before termination
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.total_amount.0, grant_amount);
+
+        // Terminate the single grant using issued_at
+        context.switch_to_executor();
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at, Some(issue_at));
+
+        // Verify the grant was terminated
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert!(grant.terminated_at.is_some());
+        assert_eq!(grant.terminated_at.unwrap(), terminate_at);
+    }
+
+    #[rstest]
+    fn test_terminate_single_grant_with_issued_at_multiple_grants(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount_1 = 10_000u128.to_otto();
+        let grant_amount_2 = 20_000u128.to_otto();
+        let issue_at_1 = 1_000;
+        let issue_at_2 = 2_000;
+        // terminate_at must be between cliff_end for issue_at_1 (2_000) and vesting_end for issue_at_1 (4_000)
+        let terminate_at = 3_000;
+
+        // Create two grants for the same user
+        contract.create_grant_internal(&alice, issue_at_1, grant_amount_1.into(), None);
+        contract.create_grant_internal(&alice, issue_at_2, grant_amount_2.into(), None);
+
+        // Verify both grants exist
+        let account = contract.accounts.get(&alice).unwrap();
+        assert_eq!(account.grants.len(), 2);
+        assert_eq!(
+            account.grants.get(&issue_at_1).unwrap().total_amount.0,
+            grant_amount_1
+        );
+        assert_eq!(
+            account.grants.get(&issue_at_2).unwrap().total_amount.0,
+            grant_amount_2
+        );
+
+        // Terminate only the first grant using issued_at
+        context.switch_to_executor();
+        context.set_block_timestamp_in_seconds(terminate_at);
+        contract.terminate(alice.clone(), terminate_at, Some(issue_at_1));
+
+        // Verify only the first grant was terminated
+        let account = contract.accounts.get(&alice).unwrap();
+        assert_eq!(account.grants.len(), 2);
+
+        let grant_1 = account.grants.get(&issue_at_1).unwrap();
+        assert!(grant_1.terminated_at.is_some());
+        assert_eq!(grant_1.terminated_at.unwrap(), terminate_at);
+
+        let grant_2 = account.grants.get(&issue_at_2).unwrap();
+        assert!(grant_2.terminated_at.is_none());
+        assert_eq!(grant_2.total_amount.0, grant_amount_2);
+    }
+
+    #[rstest]
+    fn test_terminate_nonexistent_grant_fails(
+        mut context: TestContext,
+        mut contract: Contract,
+        alice: AccountId,
+    ) {
+        let grant_amount = 10_000u128.to_otto();
+        let issue_at = 1_000;
+        let non_existent_issue_at = 9_999;
+        // terminate_at must be between cliff_end (2_000) and vesting_end (4_000)
+        let terminate_at = 3_000;
+
+        // Create a grant with issue_at
+        contract.create_grant_internal(&alice, issue_at, grant_amount.into(), None);
+
+        // Try to terminate a non-existent grant
+        context.switch_to_executor();
+        context.set_block_timestamp_in_seconds(terminate_at);
+
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            contract.terminate(alice.clone(), terminate_at, Some(non_existent_issue_at));
+        }));
+
+        assert!(result.is_err());
+
+        // Verify the original grant is still intact
+        let account = contract.accounts.get(&alice).unwrap();
+        let grant = account.grants.get(&issue_at).unwrap();
+        assert_eq!(grant.total_amount.0, grant_amount);
+        assert!(grant.terminated_at.is_none());
     }
 }
