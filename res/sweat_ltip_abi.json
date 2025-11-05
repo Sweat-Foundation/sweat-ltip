@@ -2,12 +2,12 @@
   "schema_version": "0.4.0",
   "metadata": {
     "name": "sweat-ltip",
-    "version": "0.1.4",
+    "version": "0.1.6",
     "build": {
       "compiler": "rustc 1.86.0",
       "builder": "cargo-near cargo-near-build 0.9.0"
     },
-    "wasm_hash": "CbWmJrvmUecLwJYyZgd5MdqHyrQaaNA27R33rTo8Ej1A"
+    "wasm_hash": "4owcw3XnxKFAQn93LAZQgmwv2sbKoUt699Gqz1aQnbVD"
   },
   "body": {
     "functions": [
@@ -66,6 +66,12 @@
               }
             }
           ]
+        },
+        "result": {
+          "serialization_type": "json",
+          "type_schema": {
+            "type": "string"
+          }
         }
       },
       {
@@ -508,6 +514,17 @@
               "name": "timestamp",
               "type_schema": {
                 "type": "integer",
+                "format": "uint32",
+                "minimum": 0.0
+              }
+            },
+            {
+              "name": "issued_at",
+              "type_schema": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "uint32",
                 "minimum": 0.0
               }
