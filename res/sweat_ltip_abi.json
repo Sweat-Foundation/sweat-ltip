@@ -2,12 +2,12 @@
   "schema_version": "0.4.0",
   "metadata": {
     "name": "sweat-ltip",
-    "version": "0.1.7",
+    "version": "0.1.8",
     "build": {
       "compiler": "rustc 1.86.0",
       "builder": "cargo-near cargo-near-build 0.9.0"
     },
-    "wasm_hash": "wJwhTz4hdfcfEQ3XwTZHukjEEzo8BPZPKLTfrFFcWUw"
+    "wasm_hash": "6vCvZqhohREpYaYxve3ic9S9Q9cBuw21SYXoSQNLpmqC"
   },
   "body": {
     "functions": [
@@ -84,7 +84,10 @@
       },
       {
         "name": "force_unpause",
-        "kind": "call"
+        "kind": "call",
+        "modifiers": [
+          "private"
+        ]
       },
       {
         "name": "ft_on_transfer",
@@ -573,12 +576,18 @@
           "type": "object",
           "required": [
             "account_id",
+            "calculated_at",
             "grants"
           ],
           "properties": {
             "account_id": {
               "description": "NEAR Account Identifier.\n\nThis is a unique, syntactically valid, human-readable account identifier on the NEAR network.\n\n[See the crate-level docs for information about validation.](index.html#account-id-rules)\n\nAlso see [Error kind precedence](AccountId#error-kind-precedence).\n\n## Examples\n\n``` use near_account_id::AccountId;\n\nlet alice: AccountId = \"alice.near\".parse().unwrap();\n\nassert!(\"ƒelicia.near\".parse::<AccountId>().is_err()); // (ƒ is not f) ```",
               "type": "string"
+            },
+            "calculated_at": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
             },
             "grants": {
               "type": "array",

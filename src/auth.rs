@@ -49,9 +49,8 @@ impl AuthApi for Contract {
         Self::iter_members_of(&role).collect()
     }
 
+    #[private]
     fn force_unpause(&mut self) {
-        Self::require_owner();
-
         self.unpause();
     }
 }

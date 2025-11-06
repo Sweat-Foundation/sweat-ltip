@@ -31,6 +31,7 @@ pub struct TransferKey {
 #[near(serializers = [json])]
 pub struct AccountView {
     pub account_id: AccountId,
+    pub calculated_at: u32,
     pub grants: Vec<GrantView>,
 }
 
@@ -311,6 +312,7 @@ impl GrantApi for Contract {
 
             return Some(AccountView {
                 account_id: account_id.clone(),
+                calculated_at: now(),
                 grants,
             });
         }

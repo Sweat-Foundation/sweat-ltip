@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use near_sdk::{json_types::U128, near, AccountId};
+use near_sdk::{env::panic_str, json_types::U128, near, AccountId};
 use near_sdk_contract_tools::Nep297;
 
 #[derive(Nep297)]
@@ -59,8 +59,14 @@ impl BuyData {
     }
 
     pub fn push(&mut self, account_id: &AccountId, amount: u128) {
+        if !self.bought_amounts.contains_key(account_id) {
+            self.bought_amounts.insert(account_id.clone(), 0.into());
+        }
+
         self.bought_amounts
-            .insert(account_id.clone(), amount.into());
+            .get_mut(account_id)
+            .unwrap_or_else(|| panic_str("Failed to get entry."))
+            .0 += amount;
         self.total_amount.0 += amount;
     }
 }
