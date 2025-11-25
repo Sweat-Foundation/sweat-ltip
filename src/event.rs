@@ -5,7 +5,7 @@ use near_sdk_contract_tools::Nep297;
 
 #[derive(Nep297)]
 #[near(serializers = [json])]
-#[nep297(standard = "nep171", version = "0.1.0", rename_all = "snake_case")]
+#[nep297(standard = "sweat-ltip", version = "0.1.0", rename_all = "snake_case")]
 pub enum LtipEvent {
     OrderUpdate(Vec<OrderUpdateData>),
     Terminate(TerminationData),
